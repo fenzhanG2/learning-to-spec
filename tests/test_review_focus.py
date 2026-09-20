@@ -26,7 +26,10 @@ class ReviewFocusTests(unittest.TestCase):
             self.assertTrue(any(item["path"].endswith("/resume/" + field) for item in focus["handoff_conditions"]))
         self.assertTrue(any(item["path"].endswith("/otherwise") for item in focus["handoff_conditions"]))
         self.assertTrue(any(item["path"].endswith("/reuse_condition") for item in focus["handoff_conditions"]))
-        for item in focus["short_claims"] + focus["handoff_conditions"]:
+        self.assertTrue(any(item["path"] == "/brief/approach/text" for item in focus["mechanism_summaries"]))
+        self.assertTrue(any(item["path"].startswith("/insights/closing/paragraphs/") for item in focus["mechanism_summaries"]))
+        self.assertTrue(any(item["path"].endswith("/recipes/0/when") for item in focus["mechanism_summaries"]))
+        for item in focus["short_claims"] + focus["handoff_conditions"] + focus["mechanism_summaries"]:
             value = draft
             for segment in item["path"].split("/")[1:]:
                 segment = segment.replace("~1", "/").replace("~0", "~")
@@ -53,7 +56,7 @@ class ReviewFocusTests(unittest.TestCase):
 
     def test_absent_optional_architecture_has_no_invented_claim(self):
         draft = {"article": {}, "insights": {"architecture": {"decision": "omit"}}}
-        self.assertEqual(review_focus(draft), {"schema": SCHEMA, "short_claims": [], "handoff_conditions": []})
+        self.assertEqual(review_focus(draft), {"schema": SCHEMA, "short_claims": [], "handoff_conditions": [], "mechanism_summaries": []})
 
     def test_story_support_is_not_silently_accepted_as_empty_canonical_evidence(self):
         with tempfile.TemporaryDirectory() as temporary:
