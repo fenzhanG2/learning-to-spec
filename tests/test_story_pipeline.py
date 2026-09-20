@@ -708,6 +708,9 @@ class StoryPipelineTests(unittest.TestCase):
             cached = FakeBackend([])
             run_story(None, root / "copilot", output, from_export=export, resume=True, backend_factory=lambda **options: cached)
             self.assertEqual(cached.calls, [])
+            cached_report = json.loads((output / "_support/story-report.json").read_bytes())
+            self.assertEqual(cached_report["previous_runs"][0]["calls"], backend.calls)
+            self.assertEqual(cached_report["calls"], [])
             feedback_path = root / "feedback.json"
             source_hash = hashlib.sha256(source.read_bytes()).hexdigest()
             write_json(feedback_path, {"source_sha256": source_hash, "issues": [{"reason": "Recheck the observed limit", "refs": ["E000001"]}]})
@@ -738,6 +741,10 @@ class StoryPipelineTests(unittest.TestCase):
             failing_brief = FakeBackend([{"issues": "malformed"}])
             with self.assertRaises(ValueError):
                 run_story(None, root / "copilot", output, from_export=export, resume=True, model="different", backend_factory=lambda **options: failing_brief)
+            failed_attempt = json.loads((output / "_support/story-attempt.json").read_bytes())
+            self.assertEqual(failed_attempt["previous_runs"][-1]["calls"], failing.calls)
+            self.assertEqual(failed_attempt["previous_runs"][-1]["status"], "failed")
+            self.assertEqual(failed_attempt["calls"], failing_brief.calls)
             self.assertTrue(validate_story(output)["valid"])
             self.assertEqual((output / "human-spec.html").read_text(encoding="utf-8"), html)
             brief_path = output / "_support/brief.json"

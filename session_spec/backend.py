@@ -193,6 +193,31 @@ def response_from_events(output):
                       "models": sorted(models), "message_lengths": [len(message) for message in messages], "response_selection": selection}
 
 
+def numeric_metrics(value):
+    if isinstance(value, dict):
+        return {key: numeric_metrics(nested) for key, nested in value.items()
+                if isinstance(nested, (dict, int, float)) and not isinstance(nested, bool)}
+    return value
+
+
+def isolated_usage(directory):
+    receipts = []
+    for filename in sorted((Path(directory) / "session-state").glob("*/events.jsonl")):
+        shutdown = None
+        try:
+            for line in filename.read_text(encoding="utf-8").splitlines():
+                event = json.loads(line)
+                if event.get("type") == "session.shutdown" and isinstance(event.get("data"), dict):
+                    shutdown = event["data"]
+        except (OSError, ValueError):
+            continue
+        if shutdown:
+            receipts.append({key: shutdown[key] if key == "currentModel" else numeric_metrics(shutdown[key])
+                             for key in ("totalPremiumRequests", "totalNanoAiu", "tokenDetails",
+                             "totalApiDurationMs", "modelMetrics", "currentModel") if key in shutdown})
+    return receipts
+
+
 class CopilotBackend:
     def __init__(self, executable=None, model=None, gh_host=None, timeout=600, max_calls=40):
         self.executable = find_copilot(executable)
@@ -241,13 +266,17 @@ class CopilotBackend:
             try:
                 stdout, stderr = process.communicate(prompt, timeout=self.timeout)
             except subprocess.TimeoutExpired:
+                receipt["timed_out"] = True
                 if os.name == "nt":
                     subprocess.run(["taskkill", "/PID", str(process.pid), "/T", "/F"], capture_output=True)
                 else:
                     process.kill()
                 process.communicate()
                 raise ValueError(f"Copilot timed out after {self.timeout}s during {label}.") from None
-            receipt.update({"exit_code": process.returncode, "elapsed_seconds": round(time.monotonic() - started, 2)})
+            finally:
+                receipt.update({"exit_code": process.returncode, "elapsed_seconds": round(time.monotonic() - started, 2)})
+                receipt["session_usage"] = isolated_usage(environment["COPILOT_HOME"]) if has_token else []
+                receipt["session_usage_source"] = "isolated-session-shutdown" if receipt["session_usage"] else "unavailable"
             if process.returncode:
                 raise ValueError("Copilot failed: " + redact_text(stderr or stdout)[-1800:])
             response, details = response_from_events(stdout)

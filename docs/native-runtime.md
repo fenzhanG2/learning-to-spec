@@ -58,4 +58,6 @@ The service is separate from individual MCP requests, but not guaranteed to outl
 
 ## Diagnostics
 
+Generation call receipts retain elapsed time and provider-reported usage from the temporary isolated Copilot profile before it is removed. `session_usage` preserves token categories and resolved models as reported by Copilot; cache reads must not be added again to a provider's inclusive input-token total. Missing metrics remain unavailable, not zero or a character-based estimate. The user's normal session store is never searched for metrics. Resumed story and editorial receipts retain `previous_runs`, including failed calls; top-level story call lists and editorial subsets describe overlapping calls and must not be summed together. Receipts are private diagnostics, not part of the share package.
+
 `python scripts/doctor.py` checks prerequisites. `node scripts/plugin_mcp.cjs` speaks newline-delimited MCP JSON-RPC. Private runtime logs/job errors are for local inspection only. `python scripts/session_spec.py studio --session SESSION` remains an explicit fallback. Never modify the host's registry files to conceal native-loading failures.
