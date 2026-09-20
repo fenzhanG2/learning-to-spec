@@ -121,19 +121,22 @@ def generate_edition(directory, draft, events, backend, article_validator, model
             print("[edition cached] whole-document review", flush=True)
             return edition
     attempt_path, candidate_path = directory / "edition-attempt.json", directory / "edition-candidate.json"
-    receipt = {"identity": identity, "status": "running", "failures": {}, "attempts": []}
+    receipt = {"identity": identity, "status": "running", "failure_protocol": "editorial-only/v1", "failures": {}, "attempts": []}
     edition = draft
     migrated_findings = []
     if attempt_path.is_file() and candidate_path.is_file():
         previous = json.loads(attempt_path.read_bytes())
+        receipt["previous_runs"] = [*previous.get("previous_runs", []),
+                                    {key: value for key, value in previous.items() if key != "previous_runs"}]
         previous_identity = previous.get("identity", {})
         reusable = all(previous_identity.get(key) == identity[key] for key in ("schema", "draft_sha256", "input_sha256"))
         if reusable and previous.get("candidate_sha256") == digest(candidate_path.read_bytes()):
             edition = json.loads(candidate_path.read_bytes())
-            if previous_identity == identity:
+            if previous_identity == identity and previous.get("failure_protocol") == receipt["failure_protocol"]:
                 receipt["failures"] = previous.get("failures", {})
             else:
-                migrated_findings = previous.get("failures", {}).get(previous["candidate_sha256"], [])
+                migrated_findings = [issue for issue in previous.get("failures", {}).get(previous["candidate_sha256"], [])
+                                     if issue.get("kind") in {"human_requirement", "source_fact", "contract"}]
                 receipt["prior_contract_recheck"] = {"prior_identity": previous_identity, "findings": migrated_findings}
     context = "\n\nHISTORICAL_EVENTS (仅去掉与 content 完全相同的 detailedContent，无事件截断)\n"
     context += json.dumps(compact_evidence(events), ensure_ascii=False)
@@ -204,6 +207,7 @@ def generate_edition(directory, draft, events, backend, article_validator, model
                 if review_errors:
                     raise ValueError("; ".join(review_errors))
                 errors = review["issues"]
+            receipt["failures"][candidate_hash] = errors
             errors = [*errors, *[{"reason": issue} for issue in structural]]
             receipt["attempts"].append({"attempt": attempt, "issues": errors})
             if not errors:
@@ -215,7 +219,6 @@ def generate_edition(directory, draft, events, backend, article_validator, model
                 write_json(receipt_path, receipt)
                 print("[edition accepted] human story and Agent handoff", flush=True)
                 return edition
-            receipt["failures"][candidate_hash] = errors
             write_json(attempt_path, receipt)
             print(f"[edition repair] {len(errors)} issues", flush=True)
             if max_structural_repairs:

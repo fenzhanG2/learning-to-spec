@@ -112,6 +112,19 @@ class FakeBackend:
 
 
 class StorySchemaTests(unittest.TestCase):
+    def test_human_citation_diagnostic_identifies_field_and_preserves_agent_refs(self):
+        candidate = article()
+        candidate["checks"][0]["observed"] += " (E000002)"
+        candidate["chapters"][0]["details"] = [{"title": "Details E000002", "markdown": "Known mechanism"}]
+        issues = validate_article(candidate, packet())
+        self.assertEqual(len(issues), 2)
+        self.assertTrue(any("/article/checks/0/observed" in issue for issue in issues))
+        self.assertTrue(any("/article/chapters/0/details/0/title" in issue for issue in issues))
+        self.assertTrue(all("Do not remove the required inline citations" in issue for issue in issues))
+        candidate["checks"][0]["observed"] = "Observed startup signal."
+        candidate["chapters"][0]["details"][0]["title"] = "Details"
+        self.assertEqual(validate_article(candidate, packet()), [])
+
     def test_quote_locations_recover_unique_matches_without_changing_roles(self):
         draft = {"article": article(), "insights": insights(), "brief": brief()}
         review = edition_review([{"path": "/article/title", "quote": "入口已改变。", "evidence": [{"ref": "E000099", "origin": "human", "quote": "保留功能"}]}])

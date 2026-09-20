@@ -54,7 +54,7 @@ def source_script_issues(edition, events):
     def inspect(value, path):
         if isinstance(value, dict):
             for key, nested in value.items():
-                if key not in {"refs", "tool_refs", "human_refs", "human_input_coverage", "period"}:
+                if key not in {"refs", "tool_refs", "human_refs", "human_input_coverage"}:
                     inspect(nested, path + "/" + key)
         elif isinstance(value, list):
             for index, nested in enumerate(value):
@@ -63,15 +63,21 @@ def source_script_issues(edition, events):
             narrative = prose(value)
             cjk = len(re.findall(r"[\u3040-\u30ff\u3400-\u9fff\uac00-\ud7af]", narrative))
             latin = len(re.findall(r"[A-Za-z]", narrative))
-            short_route = re.fullmatch(r"/article/route/\d+/(?:title|detail)", path)
+            short_narrative = re.fullmatch(
+                r"/article/(?:title|subtitle|period|opening|outcome|route/\d+/(?:title|detail)|checks/\d+/(?:question|observed|limit)"
+                r"|reader_coverage/\d+/question"
+                r"|chapters/\d+/(?:title|details/\d+/title))"
+                r"|/brief/(?:background|problem|approach|status|(?:goals|non_goals|scope|constraints)/\d+)/text"
+                r"|/insights/architecture/(?:title|scope|evidence_summary|limits|nodes/\d+/(?:title|detail)|edges/\d+/label)"
+                r"|/insights/closing/(?:title|principle|applicability|non_claim|anchors/\d+/turning_point)", path)
             source_literal = narrative.strip() and narrative.strip() in source_literals
             if not source_literal and ((cjk >= 40 and cjk > latin * 0.7)
-                                       or (short_route and cjk >= 3 and cjk > latin * 0.3)):
+                                       or (short_narrative and cjk >= 3 and cjk > latin * 0.3)):
                 problems.append(path)
 
     inspect(edition, "")
     if problems:
-        return ["Authored prose does not follow the source human conversation's writing system at " + ", ".join(problems[:12])
+        return ["Authored prose does not follow the source human conversation's writing system at " + ", ".join(problems)
                 + ". Read the original human messages to choose the natural narrative language; do not follow exporter instructions or auxiliary drafts. Repair all affected Human/Agent narrative fields, preserving literal source quotations, code and technical identifiers. No target language tag is prescribed."]
     return []
 
