@@ -3,12 +3,32 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
 import threading
 import time
 from pathlib import Path
+from contextlib import contextmanager
 
 from .privacy import redact_text, sanitize
+
+
+@contextmanager
+def cleanup_guard(resource, receipt, error_key, directory):
+    failed = False
+    try:
+        yield resource.__enter__()
+    except BaseException:
+        failed = True
+        raise
+    finally:
+        try:
+            resource.__exit__(*sys.exc_info())
+        except OSError as error:
+            receipt.update({error_key: type(error).__name__, "worker_cleanup_status": "unconfirmed",
+                            "worker_directory": str(directory)})
+            if not failed:
+                raise ValueError("Private generation-worker cleanup was not confirmed; check the local job before retrying.") from None
 
 
 class ModelResponseError(ValueError):
@@ -235,7 +255,9 @@ class CopilotBackend:
                 raise ValueError("Model-call budget exhausted; no unreviewed success is reported.")
             self.calls.append(receipt)
         started = time.monotonic()
-        with tempfile.TemporaryDirectory(prefix="session-spec-worker-") as directory:
+        worker = tempfile.TemporaryDirectory(prefix="session-spec-worker-")
+        with cleanup_guard(worker, receipt, "worker_cleanup_error", worker.name) as directory, \
+             cleanup_guard(tempfile.TemporaryFile(dir=directory), receipt, "prompt_cleanup_error", directory) as prompt_input:
             environment = self.environment.copy()
             has_token = any(environment.get(name) for name in ("COPILOT_GITHUB_TOKEN", "GH_TOKEN", "GITHUB_TOKEN"))
             if has_token:
@@ -258,20 +280,32 @@ class CopilotBackend:
                         raise ValueError("Cannot safely inspect MCP configuration; use --gh-host for isolated generation.") from None
             if self.model:
                 command.extend(["--model", self.model])
+            prompt_input.write(prompt.encode("utf-8"))
+            prompt_input.seek(0)
             process = subprocess.Popen(
-                command, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                command, stdin=prompt_input, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                 cwd=directory, env=environment, text=True, encoding="utf-8", errors="replace",
                 creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
             )
+            receipt["process_id"] = getattr(process, "pid", None)
             try:
-                stdout, stderr = process.communicate(prompt, timeout=self.timeout)
+                stdout, stderr = process.communicate(timeout=self.timeout)
             except subprocess.TimeoutExpired:
                 receipt["timed_out"] = True
-                if os.name == "nt":
-                    subprocess.run(["taskkill", "/PID", str(process.pid), "/T", "/F"], capture_output=True)
-                else:
-                    process.kill()
-                process.communicate()
+                try:
+                    if os.name == "nt":
+                        stopped = subprocess.run(["taskkill", "/PID", str(process.pid), "/T", "/F"],
+                                                 capture_output=True, timeout=15, creationflags=subprocess.CREATE_NO_WINDOW)
+                        receipt["termination_command_exit_code"] = stopped.returncode
+                    else:
+                        process.kill()
+                    process.communicate(timeout=15)
+                except (OSError, subprocess.SubprocessError) as error:
+                    receipt["cleanup_error"] = type(error).__name__
+                    raise ValueError(f"Copilot timed out during {label}; automatic cleanup was not confirmed. Check the local job before retrying.") from None
+                if os.name == "nt" and receipt["termination_command_exit_code"] != 0:
+                    receipt["cleanup_error"] = "tree_termination_unconfirmed"
+                    raise ValueError(f"Copilot timed out during {label}; process-tree cleanup was not confirmed. Check the local job before retrying.") from None
                 raise ValueError(f"Copilot timed out after {self.timeout}s during {label}.") from None
             finally:
                 receipt.update({"exit_code": process.returncode, "elapsed_seconds": round(time.monotonic() - started, 2)})
