@@ -1,15 +1,22 @@
 const parameters = new URLSearchParams(location.hash.slice(1));
 const access = parameters.get('access');
 const elements = name => document.getElementById(name);
-const state = { job: null, review: null, choices: {}, manifest: null, plan: null, busy: false, stage: 'source', published: false };
+const state = { job: null, review: null, choices: {}, manifest: null, plan: null, busy: false, stage: 'source', published: false, generationRetry: false };
 let planTimer;
 let planSequence = 0;
 function preview(html) {
   elements('human-preview').srcdoc = html;
 }
 const status = (text, error = false) => {
-  elements('status').textContent = text;
+  const diagnostic = String(text || '');
+  const authentication = error && /authentication token|bad credentials|authenticate.*copilot|no gh authentication/i.test(diagnostic);
+  elements('status').textContent = authentication
+    ? 'Copilot could not sign in for generation. Check the configured GitHub host/account, then retry. See technical details below.'
+    : error && diagnostic.length > 240 ? 'This step could not finish. See technical details below before retrying.' : diagnostic;
   elements('status').classList.toggle('error', error);
+  elements('error-details').hidden = !error;
+  elements('error-details').open = false;
+  elements('error-text').textContent = error ? diagnostic : '';
 };
 function show(stage) {
   state.stage = stage;
@@ -49,6 +56,7 @@ function updateControls() {
   elements('remaining').textContent = remaining ? `${remaining} still need your choice` : 'Ready to generate';
   for (const control of document.querySelectorAll('button, input, select, textarea')) control.disabled = state.busy;
   elements('generate').disabled = !state.review || Boolean(remaining) || state.busy;
+  elements('generate').textContent = state.generationRetry ? 'Retry generation →' : 'Generate spec →';
   const unresolved = [...document.querySelectorAll('[data-finding]')].some(control => control.value !== 'keep');
   elements('publish').disabled = !state.plan || state.busy || unresolved || state.published;
 }
@@ -125,6 +133,7 @@ function renderFindings() {
     replacement.value = state.choices[finding.id]?.replacement || finding.alternative || '';
     replacement.hidden = choice.value !== 'generalize';
     const changed = () => {
+      state.generationRetry = false;
       state.choices[finding.id] = { action: choice.value, replacement: replacement.value };
       replacement.hidden = choice.value !== 'generalize';
       card.classList.toggle('decided', Boolean(choice.value));
@@ -169,7 +178,7 @@ action('scan', async () => {
   const audience = delivery === 'local' ? 'local' : elements('audience').value === 'team' ? `team:${elements('team').value.trim()}` : elements('audience').value;
   const result = await request('/api/scan', { session: elements('session').value, readers: elements('readers').value, delivery, detection: elements('detection').value, audience, purpose: elements('purpose').value.trim() || 'Technical story and actionable Agent handoff', semantic: elements('detection').value === 'copilot', custom: elements('custom').value.split('\n').map(value => value.trim()).filter(Boolean) });
   rememberJob(result.job);
-  state.review = null; state.choices = {}; state.manifest = null; state.published = false;
+  state.review = null; state.choices = {}; state.manifest = null; state.published = false; state.generationRetry = false;
   invalidatePlan();
   await waitJob('Checking privacy');
   state.review = await request(`/api/review?job=${state.job}`);
@@ -181,11 +190,17 @@ action('change-source', async () => {
   status('Edit the setup, then check privacy again. Your previous job is saved.');
 });
 action('generate', async () => {
-  const started = await request('/api/generate', { job: state.job, review_id: state.review.review_id, choices: state.choices, confirmed: true });
-  invalidatePlan(); state.manifest = null; state.published = false;
-  const result = started.completed ? await request(`/api/status?job=${state.job}`) : await waitJob('Writing and checking your spec');
-  await renderOutput(result.delivery_result || result.result);
-  show('output'); status('Saved on your computer. Nothing uploaded.');
+  try {
+    const started = await request('/api/generate', { job: state.job, review_id: state.review.review_id, choices: state.choices, confirmed: true });
+    invalidatePlan(); state.manifest = null; state.published = false;
+    const result = started.completed ? await request(`/api/status?job=${state.job}`) : await waitJob('Writing and checking your spec');
+    await renderOutput(result.delivery_result || result.result);
+    state.generationRetry = false;
+    show('output'); status('Saved on your computer. Nothing uploaded.');
+  } catch (error) {
+    state.generationRetry = true;
+    throw error;
+  }
 });
 async function renderOutput(result) {
   const selected = result.files || [];
@@ -320,7 +335,7 @@ async function refreshJobs() {
 }
 async function reopenJob(identifier) {
   if (!identifier) return;
-  rememberJob(identifier); invalidatePlan(); state.manifest = null; state.review = null; state.choices = {}; state.published = false;
+  rememberJob(identifier); invalidatePlan(); state.manifest = null; state.review = null; state.choices = {}; state.published = false; state.generationRetry = false;
   elements('site-name').value = '';
   let job = await request(`/api/status?job=${identifier}`);
   if (job.status === 'running') {
@@ -333,6 +348,7 @@ async function reopenJob(identifier) {
   }
   state.review = await request(`/api/review?job=${identifier}`);
   state.choices = job.approved_choices?.choices || {};
+  state.generationRetry = job.stage === 'generate' && job.status === 'error';
   elements('filter').value = 'all';
   renderFindings();
   const preferences = state.review.preferences || {};
@@ -348,7 +364,9 @@ async function reopenJob(identifier) {
   if (job.status === 'done' && job.delivery_result) {
     await renderOutput(job.delivery_result); show('output'); status('Reopened saved files. No model call or upload.');
   } else {
-    show('review'); status(job.error || 'Your saved choices are ready to continue.', Boolean(job.error));
+    const restored = Object.keys(state.choices).length ? 'Your saved choices are ready to continue.'
+      : state.review.findings.length ? 'Choose how to handle each flagged detail before generating.' : 'Privacy check is ready. No additional details need a choice.';
+    show('review'); status(job.error || restored, Boolean(job.error));
   }
 }
 elements('saved-jobs').addEventListener('change', () => perform(async () => { await reopenJob(elements('saved-jobs').value); elements('history').open = false; }));

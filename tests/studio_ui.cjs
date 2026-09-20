@@ -81,6 +81,37 @@ test('generation failure restores the privacy screen and supports explicit retry
   assert.equal(example.elements['review-panel'].hidden, false);
   assert.equal(example.elements.generate.disabled, false);
   assert.equal(example.elements.status.textContent, 'Synthetic model failure');
+  assert.equal(example.elements.generate.textContent, 'Retry generation →');
+  assert.equal(example.elements['error-text'].textContent, 'Synthetic model failure');
+  assert.equal(example.elements['error-details'].hidden, false);
+});
+
+test('authentication errors are concise without discarding diagnostics or auto-retrying', async () => {
+  const example = await fixture();
+  const diagnostic = 'Copilot failed: Authentication token found but could not be validated (401): Bad credentials. ' + '<script>not executable</script>'.repeat(12);
+  example.responses['/api/status?job=synthetic'] = { stage: 'generate', status: 'error', error: diagnostic,
+    approved_choices: { choices: { personal: { action: 'remove' } } } };
+  await vm.runInContext("reopenJob('synthetic')", example.context);
+  assert.match(example.elements.status.textContent, /configured GitHub host\/account/);
+  assert.ok(example.elements.status.textContent.length < 200);
+  assert.equal(example.elements['error-text'].textContent, diagnostic);
+  assert.equal(example.elements['error-details'].open, false);
+  assert.equal(example.elements.generate.textContent, 'Retry generation →');
+  assert.equal(example.calls.some(call => call.route === '/api/generate'), false);
+  const choice = example.elements.findings.children[0].children.find(child => child.tag === 'select');
+  choice.value = 'keep'; choice.listeners.change();
+  assert.equal(example.elements.generate.textContent, 'Generate spec →');
+  vm.runInContext("status('Ready')", example.context);
+  assert.equal(example.elements['error-details'].hidden, true);
+  assert.equal(example.elements['error-text'].textContent, '');
+});
+
+test('a new review never claims privacy decisions have already been saved', async () => {
+  const example = await fixture();
+  example.responses['/api/status?job=synthetic'] = { stage: 'scan', status: 'done' };
+  await vm.runInContext("reopenJob('synthetic')", example.context);
+  assert.match(example.elements.status.textContent, /Choose how to handle/);
+  assert.equal(example.elements.generate.disabled, true);
 });
 
 test('upload preparation grants no approval; explicit residual choices and final click are required', async () => {
