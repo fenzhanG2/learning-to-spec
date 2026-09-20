@@ -81,7 +81,7 @@ class DurableStudio(Studio):
 
     def __init__(self, home, output, **settings):
         self.state_lock = threading.RLock()
-        super().__init__(home, output, **settings)
+        super().__init__(home, output, discover_sessions=False, **settings)
         for state_file in self.output.glob("*/job.json"):
             if state_file.is_symlink() or state_file.parent.is_symlink():
                 raise ValueError("Linked job state is not allowed")
@@ -170,6 +170,8 @@ class DurableStudio(Studio):
             return {"jobs": [self.snapshot(job["id"]) for job in jobs[:data.get("limit", 20)]]}
         if name == "open_studio":
             fragment = {"access": self.token}
+            if not data.get("job") and not data.get("session"):
+                self.sessions = list_sessions(self.home, limit=100)
             if data.get("job"):
                 self.job(data["job"])
                 fragment["job"] = data["job"]

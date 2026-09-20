@@ -36,7 +36,7 @@ def open_local(path):
 class Studio:
     durable_jobs = False
 
-    def __init__(self, home, output, session=None, open_generation=None, review_directory=None, **settings):
+    def __init__(self, home, output, session=None, open_generation=None, review_directory=None, discover_sessions=True, **settings):
         self.home = Path(home).resolve()
         self.output = Path(output).resolve()
         self.output.mkdir(parents=True, exist_ok=True)
@@ -45,8 +45,10 @@ class Studio:
         if session:
             source = resolve_session(session, self.home)
             self.sessions = [{"id": "selected", "title": source.parent.name, "path": str(source), "bytes": source.stat().st_size}]
-        else:
+        elif discover_sessions:
             self.sessions = list_sessions(self.home, limit=100)
+        else:
+            self.sessions = []
         self.jobs = {}
         self.lock = threading.Lock()
         self.action_lock = threading.RLock()

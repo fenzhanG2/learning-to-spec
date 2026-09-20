@@ -19,6 +19,8 @@ The portable `mcp.json` follows [Agent Plugins 1.0](https://agent-plugins.org/sc
 
 The background service starts lazily. `~/.learning-to-spec/runtime/<profile-hash>` stores private state outside the installation directory, scoped to the resolved Copilot home so different profiles cannot share jobs, inherited authentication or approvals. `LEARNING_TO_SPEC_HOME` explicitly overrides this root for tests. Existing local config supplies optional model, GitHub host and call budget. OS file leases serialize startup and prevent competing writers. The service binds only `127.0.0.1`, checks Host/Origin/capability, refuses cross-origin requests and never follows redirects with its capability.
 
+Starting the native service or checking health does not enumerate Copilot sessions. Exact-session review/open and saved-job recovery do not implicitly populate the session picker. Session discovery occurs only through an explicit `list_sessions` call or `open_studio` without a session/job (opening the picker); a manual Studio with no exact source also opens that picker. Reading one exact session queries only its matching metadata row, not every title in the local database. This limits metadata access as well as transcript access; it is not an OS sandbox or an encryption guarantee.
+
 | Tool | Implemented behavior |
 | --- | --- |
 | `health` | Protocol/version and active-operation count; no model call |
