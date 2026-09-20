@@ -560,10 +560,20 @@ class StoryEditorTests(unittest.TestCase):
             result = cli_main(["story", "--from-export", "unused-source", "--out", "unused-output", "--dry-run", "--max-calls", "0"])
         self.assertEqual(result, 0)
         report = json.loads(output.getvalue())
-        self.assertEqual(report["additional_story_calls_minimum"], 2)
-        self.assertEqual(report["additional_story_calls_with_repairs_maximum"], 30)
+        self.assertEqual(report["additional_story_calls_minimum"], 3)
+        self.assertEqual(report["additional_story_calls_with_repairs_maximum"], 0)
+        self.assertEqual(report["matching_cache_calls_minimum"], 0)
         self.assertEqual(report["language"], "auto")
         self.assertTrue(any("whole-document" in stage for stage in report["stages"]))
+        self.assertTrue(any("transfer probe" in stage for stage in report["stages"]))
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            result = cli_main(["story", "--from-export", "unused-source", "--out", "unused-output", "--dry-run", "--max-calls", "8", "--revise-from", "unused-prior"])
+        self.assertEqual(result, 0)
+        report = json.loads(output.getvalue())
+        self.assertEqual(report["additional_story_calls_minimum"], 2)
+        self.assertEqual(report["additional_story_calls_with_repairs_maximum"], 8)
+        self.assertIn("shared --max-calls budget", report["note"])
 
     def test_compaction_only_removes_identical_duplicate_result_text(self):
         evidence = [{"result": {"content": "same", "detailedContent": "same"}}, {"result": {"content": "short", "detailedContent": "longer evidence"}}]
