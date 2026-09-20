@@ -190,7 +190,7 @@ def generate_edition(directory, draft, events, backend, article_validator, model
                 review_errors = validate_review(review, feedback)
                 if review_errors:
                     raise ValueError("; ".join(review_errors))
-                review, locations = resolve_review_locations(review, edition, events)
+                review, locations = resolve_review_locations(review, edition, events, contract + brief_contract + brief_review)
                 write_json(directory / f"edition-review-{attempt}-locations.json", {"review": review, "relocations": locations})
                 review_errors = validate_grounding(review, edition, events, contract + brief_contract + brief_review)
                 if review_errors:
@@ -201,7 +201,7 @@ def generate_edition(directory, draft, events, backend, article_validator, model
                     write_json(directory / f"edition-review-{attempt}-grounded.json", review)
                     review_errors = validate_review(review, feedback)
                     if not review_errors:
-                        review, locations = resolve_review_locations(review, edition, events)
+                        review, locations = resolve_review_locations(review, edition, events, contract + brief_contract + brief_review)
                         write_json(directory / f"edition-review-{attempt}-grounded-locations.json", {"review": review, "relocations": locations})
                         review_errors = validate_grounding(review, edition, events, contract + brief_contract + brief_review)
                 if review_errors:

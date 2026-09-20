@@ -128,11 +128,22 @@ def string_locations(value, path=""):
             yield from string_locations(nested, path + "/" + str(index))
 
 
-def resolve_review_locations(review, edition, events):
+def resolve_review_locations(review, edition, events, contract=None):
     resolved = copy.deepcopy(review)
     changes = []
     evidence = {event["ref"]: event for event in events}
     for index, issue in enumerate(resolved.get("issues", [])):
+        contract_quote = issue.get("contract_quote")
+        if (contract and issue.get("kind") == "contract" and isinstance(contract_quote, str) and contract_quote
+                and contract_quote not in contract and "`" not in contract_quote):
+            quotation_marks = str.maketrans({"\u201c": '"', "\u201d": '"'})
+            normalized = contract.translate(quotation_marks)
+            needle = contract_quote.translate(quotation_marks)
+            start = normalized.find(needle)
+            if start >= 0 and normalized.find(needle, start + 1) < 0:
+                literal = contract[start:start + len(contract_quote)]
+                changes.append({"issue": index, "kind": "contract_quotation_marks", "from": contract_quote, "to": literal})
+                issue["contract_quote"] = literal
         quote = issue.get("quote")
         try:
             field = pointer_value(edition, issue.get("path"))
