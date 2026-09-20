@@ -1,7 +1,7 @@
 {
   "schema": "renderer-bundle/v1",
   "sources": {
-    "package-lock.json": "553bfb34fc28bda514fe41864ab6469e467ad6648d1e588911a4cb94dd28acc4",
+    "package-lock.json": "caa8bbdd2dcdf5dcabd6cf98d085a1a107253b2c73d5a0638b7241b22fd73c01",
     "session_spec/web/agent-preview.cjs": "f213e5353fbe671a4ed9b234ddc853c2d1d4ba9dd853ad284f1807d3211d8ccd",
     "session_spec/web/evidence-preview.cjs": "556c85715fdbab332cb92ee852e08b1ee33448fc61799ef3ad7441218bb37ffc",
     "session_spec/web/locale.cjs": "c7caca2eb76bada0ead5911351b5acc2e401de30dcf822d81e179fd638d8040f",
