@@ -14,9 +14,9 @@ from pathlib import Path
 from .artifacts import ArtifactClient, destination_plan, publish_package
 from .ingest import list_sessions, resolve_session
 from .private_cli import generate_private
-from .reduction import at_path, digest, load_review, scan_session, strings, suggested_action
+from .reduction import at_path, digest, load_review, scan_session, strings, suggested_action, transform
 from .reduction_semantic import semantic_review
-from .share_package import approve_package, prepare_package
+from .share_package import approve_package, load_package, prepare_package
 from .story_pipeline import validate_story
 from .delivery import filenames, preferences, validate_delivery
 
@@ -46,6 +46,7 @@ class Studio:
             self.sessions = list_sessions(self.home, limit=100)
         self.jobs = {}
         self.lock = threading.Lock()
+        self.action_lock = threading.RLock()
         self.resume_job = None
         self.resume_choices = None
         if open_generation or review_directory:
@@ -75,20 +76,28 @@ class Studio:
             if any(item["status"] == "running" for item in self.jobs.values()):
                 raise ValueError("Another operation is running; wait for it to finish")
             job.update(status="running", stage=stage, error=None)
+            self.changed(job)
 
         def worker():
             try:
                 result = operation()
                 with self.lock:
                     job.update(status="done", result=result)
+                    if stage == "generate":
+                        job["delivery_result"] = result
+                    self.changed(job)
             except Exception as error:
                 with self.lock:
                     job.update(status="error", error=str(error)[:1200])
                     if stage == "generate":
                         job["error"] += " Retry with unchanged choices to reuse the private drafting checkpoint; changing choices starts a new generation."
+                    self.changed(job)
 
         threading.Thread(target=worker, daemon=True).start()
         return {"job": job["id"]}
+
+    def changed(self, job):
+        pass
 
     def job(self, identifier):
         if identifier not in self.jobs:
@@ -96,6 +105,17 @@ class Studio:
         return self.jobs[identifier]
 
     def action(self, path, data):
+        with self.action_lock:
+            if getattr(self, "closing", False):
+                raise ValueError("Runtime is stopping; reopen it before starting work")
+            if any(item["status"] == "running" for item in self.jobs.values()):
+                raise ValueError("Another operation is running; wait for it to finish")
+            result = self._action(path, data)
+            if data.get("job") in self.jobs:
+                self.changed(self.jobs[data["job"]])
+            return result
+
+    def _action(self, path, data):
         if path == "/api/teams":
             result = ArtifactClient().teams()
             return {"teams": result.get("teams", []) if isinstance(result, dict) else result}
@@ -129,6 +149,8 @@ class Studio:
                 raise ValueError("Only a completed output folder or Markdown companion can be opened")
             review, baseline = load_review(job.get("review_directory", directory / "review"))
             selection = review.get("preferences", {})
+            if job.get("approved_choices") and job.get("decision_id") != digest(job["approved_choices"]):
+                raise ValueError("Privacy choices changed; regenerate before opening files")
             if name != "folder" and name not in filenames(selection.get("readers")):
                 raise ValueError("This file was not selected for delivery")
             validate_delivery(job["generation"], selection)
@@ -139,16 +161,29 @@ class Studio:
                 raise ValueError("Output is missing or linked; inspect the local directory")
             open_local(target)
             return {"requested": str(target), "note": "Requested the operating system's default file app; no upload or historical command execution."}
-        if path == "/api/generate":
+        if path in {"/api/choices", "/api/generate"}:
             if data.get("confirmed") is not True:
                 raise ValueError("Confirm which details will be kept or reduced before generation")
             review_directory = job.get("review_directory", directory / "review")
             review, baseline = load_review(review_directory)
             decisions = {"review_id": data.get("review_id"), "audience": review["audience"], "choices": data.get("choices")}
+            transform(review, baseline, decisions)
+            job["approved_choices"] = decisions
+            if path == "/api/choices":
+                if job.get("decision_id") != digest(decisions):
+                    job.pop("package", None)
+                    job.pop("plan", None)
+                return {"job": job["id"], "approved": True, "note": "Choices saved locally. Copilot may now start generation, but not upload."}
             retry = job.get("decision_id") == digest(decisions) and "generation" in job
+            if retry and job["status"] == "done" and "delivery_result" in job:
+                validate_delivery(job["generation"], review["preferences"])
+                return {"job": job["id"], "completed": True}
             generation = job["generation"] if retry else directory / ("generation-" + uuid.uuid4().hex)
             job["generation"] = generation
             job["decision_id"] = digest(decisions)
+            job.pop("delivery_result", None)
+            job.pop("package", None)
+            job.pop("plan", None)
 
             def generate():
                 return generate_private(review_directory, decisions, generation, self.home, resume=retry, confirm_choices=True, **self.settings)
@@ -159,22 +194,35 @@ class Studio:
                 raise ValueError("Finish generation before preparing a share package")
             review, baseline = load_review(job.get("review_directory", directory / "review"))
             selection = review.get("preferences", {})
+            if job.get("approved_choices") and job.get("decision_id") != digest(job["approved_choices"]):
+                raise ValueError("Privacy choices changed; regenerate before preparing a package")
             if selection.get("destination") != "artifactstore":
                 raise ValueError("You selected local files, not ArtifactStore; start a new destination review to upload")
+            if "package" in job:
+                return load_package(job["package"])
             package = directory / ("package-" + uuid.uuid4().hex)
             manifest = prepare_package(job["generation"] / "story", package, review["audience"], data.get("evidence") is not False, selection.get("readers"))
             job["package"] = package
             job.pop("plan", None)
             return manifest
         if path == "/api/approve":
+            if "package" not in job:
+                raise ValueError("Prepare a current package first")
             return approve_package(job["package"], data.get("package_id"), data.get("acknowledged", []), data.get("reviewed_all_files") is True)
         if path == "/api/plan":
             plan = destination_plan(job["package"], data.get("site", ""), ArtifactClient())
             job["plan"] = plan
             return plan
+        if path == "/api/verify":
+            if "plan" not in job or "package" not in job:
+                raise ValueError("No recorded publication to verify")
+            from .artifacts import verify_publication
+            return self.background(job, "verify", lambda: verify_publication(job["package"], job["plan"], ArtifactClient()))
         if path == "/api/publish":
             if "plan" not in job:
                 raise ValueError("Review a destination plan before publishing")
+            if (job["package"] / "publication.json").exists():
+                raise ValueError("Publication already attempted; verify this artifact instead of retrying the write")
             return self.background(job, "publish", lambda: publish_package(job["package"], job["plan"], data.get("confirm"), ArtifactClient()))
         raise ValueError("Unknown studio action")
 
@@ -222,6 +270,10 @@ def handler_for(studio):
                     self.send(200, {"sessions": [{key: value for key, value in item.items() if key != "path"} for item in studio.sessions],
                                     "resume_job": studio.resume_job, "resume_choices": studio.resume_choices})
                     return
+                if parsed.path == "/api/jobs":
+                    self.send(200, {"jobs": [{"id": item["id"], "stage": item["stage"], "status": item["status"], "updated_at": item.get("updated_at", "")}
+                                             for item in sorted(studio.jobs.values(), key=lambda item: item.get("updated_at", ""), reverse=True)[:100]]})
+                    return
                 job = studio.job(query.get("job", [None])[0])
                 if parsed.path == "/api/status":
                     self.send(200, {key: value for key, value in job.items() if key not in {"directory", "review_directory", "generation", "package", "plan"}})
@@ -242,10 +294,12 @@ def handler_for(studio):
                     self.send(200, review)
                 elif parsed.path == "/api/file":
                     name = query.get("name", [""])[0]
-                    if "generation" not in job or job["status"] != "done":
+                    if "generation" not in job or job["status"] == "running":
                         raise ValueError("Only completed deliverable files are available")
                     review, baseline = load_review(job.get("review_directory", job["directory"] / "review"))
                     selection = review.get("preferences", {})
+                    if job.get("approved_choices") and job.get("decision_id") != digest(job["approved_choices"]):
+                        raise ValueError("Privacy choices changed; regenerate before downloading")
                     if name not in [*filenames(selection.get("readers")), "deliverables.zip"]:
                         raise ValueError("This file was not selected for delivery")
                     manifest = validate_delivery(job["generation"], selection)

@@ -1,9 +1,10 @@
 {
   "name": "learning-to-spec",
-  "version": "0.5.5",
+  "version": "0.6.0",
   "description": "Export local Copilot sessions into human and agent work specs using Copilot CLI.",
   "author": {"name": "Local"},
   "skills": "./skills/",
+  "mcpServers": "./.mcp.json",
   "interface": {
     "displayName": "Learning to Spec",
     "shortDescription": "Session trajectory, results and next-run instructions",

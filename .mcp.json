@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "learning-to-spec": {
+      "command": "node",
+      "args": ["${CLAUDE_PLUGIN_ROOT}/scripts/plugin_mcp.cjs"],
+      "tools": ["*"]
+    }
+  }
+}
