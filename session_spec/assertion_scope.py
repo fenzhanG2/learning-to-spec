@@ -7,10 +7,11 @@ from .source_excerpt import excerpt_segments, read_display_text, source_payload
 from .story_grounding import text_values
 
 
-SCHEMA = "assertion-scope/v2"
+SCHEMA = "assertion-scope/v3"
 MAX_PAYLOAD_CHARS = 40000
 MAX_INDEX_CHARS = 24000
 MAX_ASSERTIONS = 24
+MAX_CLAIMS = 8
 RELATIONS = {
     "endswith": ("suffix predicate", "A suffix check permits an additional prefix; it does not establish whole-value equality.", "prefix_sample", "sample"),
     "startswith": ("prefix predicate", "A prefix check permits an additional suffix; it does not establish whole-value equality.", "sample_suffix", "sample"),
@@ -100,9 +101,9 @@ def assertion_scope(edition, events):
             depth = 4 if parts[1:3] == ["article", "agent_detail"] else 3
             surfaces.setdefault("/".join(parts[:depth]), []).append(claim)
         selected = []
-        while any(surfaces.values()) and len(selected) < 4:
+        while any(surfaces.values()) and len(selected) < MAX_CLAIMS:
             for pending in surfaces.values():
-                if pending and len(selected) < 4:
+                if pending and len(selected) < MAX_CLAIMS:
                     claim = pending.pop(0)
                     selected.append({"path": claim["path"], "segments": excerpt_segments(claim["quote"], 900)})
         item.update(claims=selected, omitted_claims=len(matching) - len(selected))

@@ -37,6 +37,20 @@ class AssertionScopeTests(unittest.TestCase):
         self.assertEqual([row["relation"] for row in output["assertions"]], ["prefix predicate", "membership predicate", "equality predicate"])
         self.assertNotIn("hypothetical_builtin_string_example", output["assertions"][2])
 
+    def test_later_trajectory_and_recipe_counterparts_are_not_omitted_after_four_surfaces(self):
+        ref = ["E000003"]
+        edition = {"article": {"chapters": [{"markdown": "Human claim", "refs": ref}], "agent_markdown": "Mechanism E000003",
+                               "checks": [{"observed": "Check claim", "refs": ref}], "agent_detail": {
+                                   "resume": {"checkpoint": "Resume claim", "refs": ref},
+                                   "continuation": [{"action": "Continue claim", "refs": ref}],
+                                   "recipes": [{"adapt": "Recipe claim", "refs": ref}],
+                                   "trajectory": [{"observation": "Contradictory trajectory", "refs": ref}]}}}
+        output = assertion_scope(edition, [source("assert result.endswith('sample')")])
+        paths = {claim["path"] for claim in output["assertions"][0]["claims"]}
+        self.assertIn("/article/agent_detail/trajectory/0/observation", paths)
+        self.assertIn("/article/agent_detail/recipes/0/adapt", paths)
+        self.assertEqual(output["assertions"][0]["omitted_claims"], 0)
+
     def test_no_source_execution_or_docstring_comment_execution_claim(self):
         text = 'raise RuntimeError("NEVER_EXECUTE")\n"""assert text.endswith("docstring")"""\n# assert text.endswith("comment")\nif False:\n    assert result.endswith("sample")'
         output = assertion_scope({}, [source(text)])
