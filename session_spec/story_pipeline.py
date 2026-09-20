@@ -23,6 +23,7 @@ from .language import resolve_language, validate_language
 from .story_revision import load_revision
 from .transfer_probe import effective_feedback
 from .minimization_review import LEGACY_SCHEMA as LEGACY_MINIMIZATION_SCHEMA, SCHEMA as MINIMIZATION_SCHEMA, minimization_focus, validate_minimization
+from .rationale_audit import SCHEMA as RATIONALE_SCHEMA, rationale_focus, validate_rationale_audit
 
 
 RENDERER = Path(__file__).resolve().parent / "web/render-story.cjs"
@@ -209,6 +210,12 @@ def validate_story(directory):
                     errors.append("Unknown or missing minimization index identity")
                 else:
                     errors.extend(validate_minimization(receipt["review"], edition, packet, minimization_focus(edition, packet, minimization_schema)))
+            rationale_schema = receipt.get("identity", {}).get("rationale_audit")
+            if rationale_schema is not None:
+                if rationale_schema != RATIONALE_SCHEMA or not isinstance(receipt.get("review"), dict):
+                    errors.append("Unknown rationale audit identity or invalid review")
+                else:
+                    errors.extend(validate_rationale_audit(receipt["review"], rationale_focus(edition, packet), packet))
             if receipt.get("status") != "completed" or receipt.get("review", {}).get("issues") or receipt.get("output_sha256") != file_hash(edition_path):
                 errors.append("Whole-document review does not match the accepted edition")
             if not brief_path.is_file() or edition != {"article": article, "insights": insights, "brief": json.loads(brief_path.read_bytes())}:

@@ -124,6 +124,10 @@ Human stories explain the original problem, meaningful goals/boundaries, causal 
 
 Language naturally follows the source conversation unless the user explicitly requests translation. Empty non-goals or architecture sections are omitted, not fabricated. Structural consistency and model review are not correctness proofs.
 
+Each retained Agent rationale receives a separate, source-local review disposition in the existing editorial call: explicit reason, inference, action/result only, retrospective explanation or unsupported. Literal quotations, source roles, declared references and later-phase boundaries are checked before accepting it. A recorded failure or successful edit is not itself evidence of a speaker's motive. These internal checks neither expose hidden reasoning nor add a quote catalogue to the handoff; semantic entailment still requires model judgment and is not guaranteed.
+
+Phase citations are not exclusive time ranges: one message can explain a decision and introduce the next phase. Potentially later sources require an explicit temporal adjudication, not an automatic backdating verdict or duplicated aggregate citations. This judgment is still semantic, not a chronology proof.
+
 See [output contract](docs/output-contract.md), [privacy threat model and research](docs/privacy-design.md) and [source/license notices](third_party/NOTICES.md). Reference projects are not runtime dependencies.
 
 ## Compatibility
