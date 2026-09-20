@@ -8,6 +8,7 @@ from pathlib import Path
 from session_spec.review_focus import SCHEMA, review_focus
 from session_spec.story_article import validate_article
 from session_spec.story_editor import generate_edition
+from session_spec.story_grounding import pointer_value
 from session_spec.story_pipeline import run_story
 from test_story_pipeline import FakeBackend, article, brief, edition_review, insights, packet
 
@@ -59,7 +60,54 @@ class ReviewFocusTests(unittest.TestCase):
 
     def test_absent_optional_architecture_has_no_invented_claim(self):
         draft = {"article": {}, "insights": {"architecture": {"decision": "omit"}}}
-        self.assertEqual(review_focus(draft), {"schema": SCHEMA, "short_claims": [], "handoff_conditions": [], "mechanism_summaries": []})
+        self.assertEqual(review_focus(draft), {"schema": SCHEMA, "short_claims": [], "handoff_conditions": [], "mechanism_summaries": [], "comparison_groups": []})
+
+    def test_comparisons_include_every_route_without_guessing_a_verdict(self):
+        draft = {"article": article(), "brief": brief(), "insights": insights()}
+        routes = draft["article"]["agent_detail"]["continuation"]
+        routes.append(copy.deepcopy(routes[0]))
+        routes[1]["trigger"] = "Only if the first route no longer applies."
+        routes[1]["steps"][0]["action"] = "Inspect a different entry before editing."
+        before = copy.deepcopy(draft)
+        groups = {item["check"]: item for item in review_focus(draft)["comparison_groups"]}
+        self.assertEqual(len(groups), 4)
+        for index in range(2):
+            base = f"/article/agent_detail/continuation/{index}"
+            self.assertIn(base + "/done_when", groups["commission_vs_design"]["paths"])
+            for field in ("action", "precondition", "expected", "otherwise"):
+                self.assertIn(base + "/steps/0/" + field, groups["first_move_and_human_continuation"]["paths"])
+        self.assertIn("/insights/closing/paragraphs", groups["first_move_and_human_continuation"]["paths"])
+        self.assertIn("/article/human_input_coverage", groups["accounting_vs_narrative"]["paths"])
+        self.assertIn("/article/agent_detail/trajectory/0/tool_steps/0/decision", groups["observed_vs_inferred_decisions"]["paths"])
+        for group in groups.values():
+            self.assertEqual(group["missing_paths"], [])
+            self.assertEqual(set(group), {"check", "category", "paths", "missing_paths"})
+            for path in group["paths"]:
+                pointer_value(draft, path)
+        self.assertEqual(draft, before)
+
+    def test_missing_counterpart_is_explicit_not_synthesized(self):
+        draft = {"article": article(), "brief": brief(), "insights": insights()}
+        del draft["article"]["agent_detail"]["resume"]["next_action"]
+        groups = review_focus(draft)["comparison_groups"]
+        group = next(item for item in groups if item["check"] == "first_move_and_human_continuation")
+        path = "/article/agent_detail/resume/next_action"
+        self.assertIn(path, group["missing_paths"])
+        self.assertNotIn(path, group["paths"])
+
+    def test_joint_and_editor_contracts_share_commission_and_continuation_rules(self):
+        from session_spec.story_draft import generate_draft
+        events = packet()
+        draft = {"article": article(), "brief": brief(), "insights": insights()}
+        with tempfile.TemporaryDirectory() as temporary:
+            writer = FakeBackend([draft])
+            generate_draft(Path(temporary), events, None, writer)
+            for clause in ("宽泛的修复请求不自动要求", "首步约定", "历史约定", "归属约定", "人读收束约定"):
+                self.assertIn(clause, writer.prompts[0])
+            backend = FakeBackend([edition_review()])
+            generate_edition(Path(temporary), draft, events, backend, validate_article)
+            for clause in ("宽泛的修复请求不自动要求", "首步约定", "comparison_groups", "checked.note"):
+                self.assertIn(clause, backend.prompts[0])
 
     def test_story_support_is_not_silently_accepted_as_empty_canonical_evidence(self):
         with tempfile.TemporaryDirectory() as temporary:

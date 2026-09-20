@@ -34,6 +34,27 @@ class AgentEvidenceTests(unittest.TestCase):
         self.assertIn(aside, legacy["evidence.md"])
         self.assertEqual(phase["human_refs"], ["E000000", "E000001"])
 
+    def test_claim_citations_do_not_promote_accounting_but_keep_material_short_inputs(self):
+        candidate = article()
+        aside = "An accounting-only greeting."
+        correction = "Do not restart."
+        events = [{"ref": "E000000", "type": "user.message", "text": aside, "human_input": aside}, *packet(),
+                  {"ref": "E000003", "type": "user.message", "text": correction, "human_input": correction}]
+        phase = candidate["agent_detail"]["trajectory"][0]
+        phase["human_refs"] = ["E000000", "E000001", "E000003"]
+        phase["refs"] = ["E000002", "E000003"]
+        original = copy.deepcopy((candidate, events))
+        current = render_agent_package(candidate, events, "en")
+        self.assertNotIn("### E000000", current["evidence.md"])
+        self.assertIn("### E000003", current["evidence.md"])
+        self.assertIn(correction, current["evidence.md"])
+        prior = render_agent_package(candidate, events, "en", "handoff-portable-v4")
+        self.assertIn("### E000000", prior["evidence.md"])
+        self.assertEqual((candidate, events), original)
+        phase["refs"].insert(0, "E000000")
+        misclassified = render_agent_package(candidate, events, "en")
+        self.assertIn("### E000000", misclassified["evidence.md"])
+
     def test_absent_rationale_does_not_add_empty_citations(self):
         candidate = article()
         candidate["agent_detail"]["trajectory"][0]["rationale"] = {"basis": "not_recorded", "text": "", "refs": []}

@@ -5,14 +5,14 @@ from .storage import write_json
 
 LEGACY_PRESENTATION = {"schema": "agent-presentation/v1", "evidence_substitution": "literal"}
 PRESENTATION = {"schema": "agent-presentation/v2", "mode": "markdown-files"}
-EVIDENCE_RENDERER = "companion/v6"
+EVIDENCE_RENDERER = "companion/v7"
 HUMAN_PRESENTATION = {"schema": "human-presentation/v1", "source_heading": "neutral"}
 
 
 def render_agent_package(article, events, language, trajectory_style=None):
     markdown = render_agent(article, events, language, trajectory_style)
     files = {"agent-spec.md": markdown}
-    complete_short = trajectory_style in {"handoff-portable-v3", "handoff-portable-v4"} or trajectory_style is None and article.get("agent_detail", {}).get("schema") == "agent-detail/v3"
+    complete_short = trajectory_style in {"handoff-portable-v3", "handoff-portable-v4", "handoff-portable-v5"} or trajectory_style is None and article.get("agent_detail", {}).get("schema") == "agent-detail/v3"
     payload_aware = trajectory_style == "handoff-portable-v2" or complete_short
     portable = trajectory_style == "handoff-portable" or payload_aware
     separate = trajectory_style == "handoff-split" or portable

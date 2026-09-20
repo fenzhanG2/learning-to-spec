@@ -204,7 +204,7 @@ def validate_usage(detail, events, ledger):
     return errors
 
 
-def handoff_phase(phase, index, scoped_citations=False):
+def handoff_phase(phase, index, scoped_citations=False, claim_only=False):
     label = index.label
     lines = ["### " + phase["id"] + " — " + phase["title"], "", phase["summary"], ""]
     for number, step in enumerate(phase["tool_steps"], 1):
@@ -219,6 +219,8 @@ def handoff_phase(phase, index, scoped_citations=False):
         lines.extend([label("Rationale", "依据") + " [" + rationale["basis"] + "]: " + rationale["text"] + rationale_sources, ""])
     phase_sources = ([*phase["refs"], *phase["human_refs"]] if scoped_citations else
                      [*phase["human_refs"], *phase["refs"], *rationale["refs"]])
+    if claim_only:
+        phase_sources = phase["refs"]
     lines.extend([label("Outcome", "结果") + " [" + phase["outcome"] + "]: " + phase["observation"], "",
                   label("Next state: ", "后续状态：") + phase["next_state"], "",
                   label("Selected evidence: ", "关键来源：") + index.cite(phase_sources), ""])

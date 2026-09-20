@@ -111,7 +111,7 @@ def validate_record(record, events):
             or not isinstance(documents, dict) or set(documents) != {"agent-spec.md", "evidence.md"}
             or any(not isinstance(value, str) for value in documents.values())):
         return ["Transfer probe source or delivered-pair binding is invalid"]
-    if (not isinstance(identity.get("renderer"), str) or identity["renderer"] not in {"companion/v5", EVIDENCE_RENDERER}
+    if (not isinstance(identity.get("renderer"), str) or identity["renderer"] not in {"companion/v5", "companion/v6", EVIDENCE_RENDERER}
             or any(not isinstance(identity.get(key), str)
             or not re.fullmatch(r"[a-f0-9]{64}", identity[key]) for key in ("candidate_sha256", "contract_sha256"))):
         return ["Transfer probe candidate or contract binding is invalid"]

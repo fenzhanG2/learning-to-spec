@@ -38,8 +38,11 @@ class TransferProbeTests(unittest.TestCase):
     def test_probe_accepts_versioned_citations_but_not_unknown_renderers(self):
         with tempfile.TemporaryDirectory() as temporary:
             record = run_probe(draft(), packet(), FakeBackend([transfer_review()]), Path(temporary))
-            self.assertEqual(record["identity"]["renderer"], "companion/v6")
+            self.assertEqual(record["identity"]["renderer"], "companion/v7")
             self.assertEqual(validate_record(record, packet()), [])
+            for renderer in ("companion/v5", "companion/v6"):
+                record["identity"]["renderer"] = renderer
+                self.assertEqual(validate_record(record, packet()), [])
             for renderer in ("companion/v999", [], {}, None, 6, True):
                 with self.subTest(renderer=renderer):
                     record["identity"]["renderer"] = renderer
