@@ -22,7 +22,7 @@ def copilot_home():
     return Path(os.environ.get("COPILOT_HOME", str(Path.home() / ".copilot"))).expanduser()
 
 
-def metadata_rows(home):
+def metadata_rows(home, session_id=None):
     database = home / "data.db"
     if not database.exists():
         return {}
@@ -33,7 +33,11 @@ def metadata_rows(home):
         wanted = [name for name in ("id", "title", "updated_at", "is_running") if name in columns]
         if "id" not in wanted:
             return {}
-        return {row["id"]: sanitize(dict(row)) for row in connection.execute("SELECT " + ",".join(wanted) + " FROM sessions")}
+        query = "SELECT " + ",".join(wanted) + " FROM sessions"
+        if session_id is not None:
+            query += " WHERE id = ?"
+        rows = connection.execute(query, () if session_id is None else (session_id,))
+        return {row["id"]: sanitize(dict(row)) for row in rows}
     except sqlite3.DatabaseError:
         return {}
     finally:
@@ -88,7 +92,7 @@ def origin_of(event, session_id):
 
 def read_session(path, home):
     session_id = path.parent.name
-    metadata = metadata_rows(home).get(session_id, {})
+    metadata = metadata_rows(home, session_id).get(session_id, {})
     initial_size = path.stat().st_size
     digest = hashlib.sha256()
     records = []

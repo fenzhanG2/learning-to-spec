@@ -22,7 +22,7 @@ TOOLS = [
     tool("health", "Check the local native runtime. No model call, session-content read or upload.", read_only=True),
     tool("list_sessions", "List local session IDs, sizes and dates only. Titles/snippets remain in the private Studio; do not guess the target.", {"limit": LIMIT}, read_only=True),
     tool("list_jobs", "List durable jobs and safe progress metadata across conversations and runtime restarts.", {"limit": LIMIT}, read_only=True),
-    tool("open_studio", "Open the private local approval UI in the default browser. Hosts may stop idle sessions even with the App open; if Studio disconnects, check get_job and reopen the same job, never create or replay work automatically. No disclosure choices or uploads are made. The access capability never enters this conversation.", {"session": SESSION, "job": JOB}),
+    tool("open_studio", "Open the private local approval UI. Pass an exact session or job to avoid discovering other sessions. With neither, explicitly opens the local session picker and reads session metadata. Hosts may stop idle sessions even with the App open; if disconnected, check get_job and reopen the same job, never create or replay work automatically. No choices or uploads are made; the access capability is not returned.", {"session": SESSION, "job": JOB}),
     tool("start_review", "Start privacy review after explicit reader, delivery and detection choices. Local detection sends nothing to a model. Contextual detection requires separate semantic=true consent; findings stay in the private UI.", {
         "session": SESSION, "readers": {"type": "string", "enum": ["human", "agent", "both"]},
         "delivery": {"type": "string", "enum": ["local", "artifactstore"]},
