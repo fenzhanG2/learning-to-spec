@@ -234,6 +234,9 @@ class StorySchemaTests(unittest.TestCase):
         missing_scope = edition_review()
         missing_scope["checked"] = [check for check in missing_scope["checked"] if check["category"] != "acceptance_scope"]
         self.assertTrue(validate_review(missing_scope))
+        self.assertEqual(validate_review(missing_scope, protocol="grounded-findings/v2"), [])
+        self.assertTrue(validate_review(edition_review(), protocol="grounded-findings/v2"))
+        self.assertTrue(validate_review(edition_review(), protocol="unrecognized"))
         correction = "复核当前入口仍保留原有功能；部署不在本路线范围内。"
         backend = FakeBackend([review, {"patches": [{"op": "replace", "path": field_path, "value": correction}]}, edition_review()])
         with tempfile.TemporaryDirectory() as temporary:
@@ -243,6 +246,9 @@ class StorySchemaTests(unittest.TestCase):
             self.assertIn("acceptance_scope", backend.prompts[0])
             self.assertIn("Specified local checks may suffice", backend.prompts[1])
             self.assertEqual(len(backend.calls), 3)
+            receipt = json.loads((Path(temporary) / "edition-receipt.json").read_bytes())
+            self.assertEqual(receipt["review_protocol"], "grounded-findings/v3")
+            self.assertEqual(receipt["identity"]["review_protocol"], "grounded-findings/v3")
 
     def test_imported_skill_help_is_not_promoted_to_human_authority(self):
         records = [
