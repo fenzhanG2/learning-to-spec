@@ -5,18 +5,19 @@ from .storage import write_json
 
 LEGACY_PRESENTATION = {"schema": "agent-presentation/v1", "evidence_substitution": "literal"}
 PRESENTATION = {"schema": "agent-presentation/v2", "mode": "markdown-files"}
-EVIDENCE_RENDERER = "companion/v4"
+EVIDENCE_RENDERER = "companion/v5"
 HUMAN_PRESENTATION = {"schema": "human-presentation/v1", "source_heading": "neutral"}
 
 
 def render_agent_package(article, events, language, trajectory_style=None):
     markdown = render_agent(article, events, language, trajectory_style)
     files = {"agent-spec.md": markdown}
-    payload_aware = trajectory_style == "handoff-portable-v2" or trajectory_style is None and article.get("agent_detail", {}).get("schema") == "agent-detail/v3"
+    complete_short = trajectory_style == "handoff-portable-v3" or trajectory_style is None and article.get("agent_detail", {}).get("schema") == "agent-detail/v3"
+    payload_aware = trajectory_style == "handoff-portable-v2" or complete_short
     portable = trajectory_style == "handoff-portable" or payload_aware
     separate = trajectory_style == "handoff-split" or portable
     if separate:
-        files["evidence.md"] = EvidenceIndex(events, tool_ledger(events), language, portable=portable, payload_aware=payload_aware).companion(markdown)
+        files["evidence.md"] = EvidenceIndex(events, tool_ledger(events), language, portable=portable, payload_aware=payload_aware, complete_short=complete_short).companion(markdown)
     return files
 
 

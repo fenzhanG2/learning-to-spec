@@ -10,6 +10,7 @@ from .storage import PROMPTS, digest, write_json
 from .language import language_contract, source_language_reference, validate_language
 from .model_io import generate_json
 from .review_focus import SCHEMA as FOCUS_SCHEMA, review_focus
+from .review_crosswalk import SCHEMA as CROSSWALK_SCHEMA, review_crosswalk
 
 
 EDITION_SCHEMA = "story-edition/v2"
@@ -147,7 +148,7 @@ def generate_edition(directory, draft, events, backend, article_validator, model
     structure_contract = (PROMPTS / "story-draft.md").read_text(encoding="utf-8")
     brief_contract = (PROMPTS / "story-brief.md").read_text(encoding="utf-8")
     brief_review = (PROMPTS / "story-brief-review.md").read_text(encoding="utf-8")
-    identity = {"schema": EDITION_SCHEMA, "review_protocol": REVIEW_PROTOCOL, "review_focus": FOCUS_SCHEMA, "draft_sha256": fingerprint(draft), "input_sha256": fingerprint(events),
+    identity = {"schema": EDITION_SCHEMA, "review_protocol": REVIEW_PROTOCOL, "review_focus": FOCUS_SCHEMA, "review_crosswalk": CROSSWALK_SCHEMA, "draft_sha256": fingerprint(draft), "input_sha256": fingerprint(events),
                 "contract_sha256": digest((contract + brief_contract + brief_review + structure_contract).encode()),
                 "model": model or "copilot-default", "prior_findings_sha256": fingerprint(prior_findings or []),
                 "feedback_sha256": fingerprint(feedback or [])}
@@ -226,9 +227,12 @@ def generate_edition(directory, draft, events, backend, article_validator, model
             if not errors and not structural:
                 focus = review_focus(edition)
                 write_json(directory / f"edition-focus-{attempt}.json", {"candidate_sha256": candidate_hash, **focus})
+                crosswalk = review_crosswalk(edition, events)
+                write_json(directory / f"edition-crosswalk-{attempt}.json", {"candidate_sha256": candidate_hash, **crosswalk})
                 review_fields = "issues/suggestions/checked/summary" + ("/feedback_resolution" if feedback else "")
                 review_prompt = (contract + context + "\n\nCURRENT_EDITION\n" + json.dumps(edition, ensure_ascii=False)
                                  + "\n\nREVIEW_FOCUS (deterministic excerpts of this same edition, not evidence or extra authority)\n" + json.dumps(focus, ensure_ascii=False)
+                                 + "\n\nSOURCE_CLAIM_CROSSWALK (citation-locality aid, not proof; verify exact source and all visible counterparts)\n" + json.dumps(crosswalk, ensure_ascii=False)
                                  + "\n\nPRIOR_REPAIR_FINDINGS (historical review findings, not current facts; recheck against source and every visible counterpart)\n"
                                  + json.dumps(prior_review_findings(receipt["failures"]), ensure_ascii=False)
                                  + "\n\nDETERMINISTIC_CHECKS\n[]"

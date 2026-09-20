@@ -148,8 +148,8 @@ def decision_phase(phase, ledger, label):
 
 
 def render_transfer(article, events, ledger, language, trajectory_style="decisions"):
-    payload_aware = trajectory_style == "handoff-portable-v2"
-    portable = trajectory_style in {"handoff-portable", "handoff-portable-v2"}
+    payload_aware = trajectory_style in {"handoff-portable-v2", "handoff-portable-v3"}
+    portable = trajectory_style in {"handoff-portable", "handoff-portable-v2", "handoff-portable-v3"}
     separate = trajectory_style == "handoff-split" or portable
     if separate:
         trajectory_style = "handoff"
