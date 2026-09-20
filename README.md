@@ -68,7 +68,7 @@ For a development checkout only, use `copilot --plugin-dir "/absolute/path/to/le
 python scripts/session_spec.py studio --session "SESSION_UUID_OR_EVENTS_JSONL"
 ```
 
-Open the private localhost URL printed by the command. The four-stage Studio guides reader/delivery selection, disclosure review, selected-file downloads and optional publication. Keep the process running; launch background processes with hidden windows on Windows. Do not share the URL's access fragment.
+Open the private localhost URL printed by the command. The three-step Studio guides reader/delivery selection, disclosure review, selected-file downloads and optional publication. Keep the process running; launch background processes with hidden windows on Windows. Do not share the URL's access fragment.
 
 “Local” means no ArtifactStore publication, not offline model inference. Local privacy rules make no model calls; optional contextual review sends pre-masked context to Copilot with consent. Generation sends the approved reduced session to Copilot and uses your quota.
 
@@ -127,6 +127,8 @@ See [output contract](docs/output-contract.md), [privacy threat model and resear
 ## Compatibility
 
 This project was previously named Copilot Session Spec. New local state defaults to `~/.learning-to-spec/`; configuration falls back to `~/.copilot-session-spec/config.json` when the new config is absent. Existing sessions and old outputs are not moved. Historical schema IDs such as `copilot-session-spec/v1` remain stable for compatibility. The internal Python package/entry script remains `session_spec` / `scripts/session_spec.py`.
+
+If App can open Studio but generation reports authentication failure, first check the configured GitHub host rather than repeatedly signing in. The App account and the generation CLI's selected host can differ, including an inherited legacy `gh_host`. To deliberately use an existing github.com `gh` login, set `"gh_host": "github.com"` in `~/.learning-to-spec/config.json` (preserve any other settings), or pass `--gh-host github.com` to the CLI. For Enterprise, choose that authorized host instead. No tokens belong in this file. Finish active jobs and use the native `shutdown` tool before restarting the runtime so it reads the new selection. Reopen the same job and explicitly retry; privacy decisions and failed attempts remain. Studio keeps full local diagnostics under **Technical details**; authentication is never retried or changed automatically.
 
 Direct `story`, `export`, `refresh-story` and `validate` commands remain for explicitly requested legacy workflows; they do not establish privacy approval or permission to upload.
 
