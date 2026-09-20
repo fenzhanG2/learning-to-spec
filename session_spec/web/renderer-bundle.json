@@ -1,17 +1,17 @@
 {
   "schema": "renderer-bundle/v1",
   "sources": {
-    "package-lock.json": "a5ff3f97e07ab32d654fb6fa9686e4c9b4df78b97c521a984f0fcb2676adfef5",
+    "package-lock.json": "3a57f5606f54830a2c24cb599d445b08b21a447c0cad9e3b3e958e511a2ca311",
     "session_spec/web/agent-preview.cjs": "f213e5353fbe671a4ed9b234ddc853c2d1d4ba9dd853ad284f1807d3211d8ccd",
     "session_spec/web/evidence-preview.cjs": "556c85715fdbab332cb92ee852e08b1ee33448fc61799ef3ad7441218bb37ffc",
-    "session_spec/web/locale.cjs": "1a8d31986387046e34290c16aa1c62919ba6b4149c3c023eb2e9272b1db6cd33",
+    "session_spec/web/locale.cjs": "c7caca2eb76bada0ead5911351b5acc2e401de30dcf822d81e179fd638d8040f",
     "session_spec/web/render-story.cjs": "94eebe4bde299a4d5269f0ba362b2c16d90091874c7b7552eeb077be9b2f7d04",
     "session_spec/web/story-diagram.cjs": "71f6931005354a94097ffbc533219923d6563d0cd0592fa1f652b5fd28db7e48",
-    "session_spec/web/story-page.cjs": "9e846f519241f26554fe40126ab0c6cdf94ebd2a1cd3354adea6489d294a228d",
+    "session_spec/web/story-page.cjs": "971e70c7eba6e42c4a7c32b8c54a2c7d38cd09f4fdc3f7d9d43f41ad8e60a82d",
     "third_party/rendering-dependencies.txt": "081440de020b3abf43d09b2e65fe128f7b4bd4c27298747d17258149983dbb0a"
   },
   "outputs": {
-    "render-story.bundle.cjs": "a2ca29e849ddb3c6f738ec4e9ce7e2154f6e2805d6faad4be132f73462732aef",
+    "render-story.bundle.cjs": "c6c4554849c870bf2852c5a3b20483fe2b29314cdec1ea1463f1e36feb54d779",
     "render-story.bundle.cjs.LEGAL.txt": "386e01c0595f567479d56b4b9f2ffd69c49eace601820c422e7b7a72bfb9aadf"
   }
 }

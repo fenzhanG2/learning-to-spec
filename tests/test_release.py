@@ -27,6 +27,7 @@ class ReleaseTests(unittest.TestCase):
         self.assertEqual((root / entry['source']).resolve(), root)
         self.assertEqual(entry['name'], manifest['name'])
         self.assertEqual(entry['version'], manifest['version'])
+        self.assertEqual(json.loads((root / '.plugin/plugin.json').read_bytes())['version'], manifest['version'])
         self.assertTrue((root / entry['source'] / 'skills/learning-to-spec/SKILL.md').is_file())
 
     @unittest.skipUnless(shutil.which('node'), 'Node.js is needed for renderer integration')
@@ -55,12 +56,21 @@ class ReleaseTests(unittest.TestCase):
                                'agent-presentation.json': {'schema': 'agent-presentation/v2', 'mode': 'markdown-files'}}.items():
                 (support / name).write_text(json.dumps(data), encoding='utf-8')
             output = root / 'human.html'
-            render = subprocess.run([sys.executable, '-c',
-                'from pathlib import Path; import sys; from session_spec.story_pipeline import render_story; render_story(Path(sys.argv[1]), Path(sys.argv[2]))',
-                str(support), str(output)], cwd=plugin, capture_output=True, text=True, encoding='utf-8', timeout=60)
-            self.assertEqual(render.returncode, 0, render.stderr)
-            self.assertIn('<!doctype html>', output.read_text(encoding='utf-8'))
-            self.assertNotIn('data-open-agent', output.read_text(encoding='utf-8'))
+            for language, disclaimer in (
+                ('zh-CN', '不代表为这份文档重新执行过这些检查'),
+                ('en', 'the checks were not rerun for this document'),
+            ):
+                with self.subTest(language=language):
+                    (support / 'language.json').write_text(json.dumps({'language': language}), encoding='utf-8')
+                    render = subprocess.run([sys.executable, '-c',
+                        'from pathlib import Path; import sys; from session_spec.story_pipeline import render_story; render_story(Path(sys.argv[1]), Path(sys.argv[2]))',
+                        str(support), str(output)], cwd=plugin, capture_output=True, text=True, encoding='utf-8', timeout=60)
+                    self.assertEqual(render.returncode, 0, render.stderr)
+                    html = output.read_text(encoding='utf-8')
+                    self.assertIn('<!doctype html>', html)
+                    self.assertIn(disclaimer, html)
+                    self.assertNotIn('_support', html)
+                    self.assertNotIn('data-open-agent', html)
             source = plugin / 'session_spec/web/story-page.cjs'
             source.write_bytes(source.read_bytes() + b'\n')
             check = subprocess.run([sys.executable, '-c',
