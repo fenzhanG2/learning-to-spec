@@ -1,9 +1,12 @@
 import json
+import shutil
+import subprocess
 import tempfile
 import threading
 import unittest
 import urllib.error
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor
 from session_spec.reduction import apply_review, recommended_decisions, scan_session
 from http.server import ThreadingHTTPServer
 from pathlib import Path
@@ -57,6 +60,62 @@ class StudioTests(unittest.TestCase):
         self.assertNotIn(self.studio.token.encode(), body)
         self.assertIn("script-src 'self';", headers["Content-Security-Policy"])
         self.assertIn(b' sandbox', body)
+
+    def test_three_step_ui_has_one_generate_action_and_no_review_checkboxes(self):
+        _, _, body = self.request("/")
+        for removed in (b'Save choices', b'I reviewed', b'I inspected', b'type="checkbox"', b'id="plan"', b'id="refresh-jobs"'):
+            self.assertNotIn(removed, body)
+        self.assertEqual(body.count(b'id="generate"'), 1)
+        self.assertNotIn(b'id="step-share"', body)
+        self.assertIn(b'<summary>Privacy & writing options', body)
+        _, _, script = self.request("/studio.js")
+        self.assertIn(b'confirmed: true', script)
+        self.assertIn(b'publish_intent: true', script)
+        self.assertNotIn(b'reviewed_all_files: true', script)
+
+    @unittest.skipUnless(shutil.which("node"), "Node is required for UI state tests")
+    def test_browser_state_transitions(self):
+        result = subprocess.run(["node", "--test", str(Path(__file__).with_name("studio_ui.cjs"))],
+                                capture_output=True, text=True, encoding="utf-8", timeout=30)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_stale_destination_cannot_grant_upload_approval(self):
+        package = self.root / "package"
+        package.mkdir()
+        self.studio.jobs["test"] = {"id": "test", "stage": "generate", "status": "done", "directory": self.root,
+                                    "package": package, "plan": {"plan_id": "current"}}
+        with patch("session_spec.studio.approve_package") as approve, patch("session_spec.studio.publish_package") as publish:
+            with self.assertRaisesRegex(ValueError, "Destination changed"):
+                self.studio.action("/api/publish", {"job": "test", "confirm": "stale", "publish_intent": True})
+            approve.assert_not_called()
+            publish.assert_not_called()
+
+    def test_status_waits_for_terminal_checkpoint_write(self):
+        entered = threading.Event()
+        release = threading.Event()
+        persisted = threading.Event()
+        job = {"id": "test", "stage": "scan", "status": "new", "directory": self.root}
+        self.studio.jobs["test"] = job
+
+        def checkpoint(current):
+            if current["status"] == "done":
+                entered.set()
+                release.wait(5)
+                persisted.set()
+
+        self.studio.changed = checkpoint
+        self.studio.background(job, "scan", lambda: {"findings": 0})
+        self.assertTrue(entered.wait(5))
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            pending = executor.submit(self.request, "/api/status?job=test", {"Authorization": "Bearer " + self.studio.token})
+            try:
+                self.assertFalse(pending.done())
+            finally:
+                release.set()
+            status, _, body = pending.result(timeout=5)
+        self.assertTrue(persisted.is_set())
+        self.assertEqual(status, 200)
+        self.assertEqual(json.loads(body)["status"], "done")
 
     def test_preview_uses_srcdoc_without_relaxing_sandbox(self):
         status, headers, body = self.request('/')
@@ -124,6 +183,7 @@ class StudioTests(unittest.TestCase):
             reopened = Studio(self.root / "home", self.root / "new-studio", self.studio.sessions[0]["path"], generation, review_directory)
             self.assertIsNotNone(reopened.resume_job)
             self.assertEqual(reopened.resume_choices, choices["choices"])
+            self.assertEqual(reopened.jobs[reopened.resume_job]["approved_choices"], choices)
         with patch("session_spec.studio.validate_story", return_value={"valid": False}):
             with self.assertRaisesRegex(ValueError, "validated"):
                 Studio(self.root / "home", self.root / "new-studio", self.studio.sessions[0]["path"], generation, review_directory)

@@ -133,7 +133,7 @@ class DurableStudio(Studio):
         elif job["status"] == "running":
             result["next_action"] = "Keep the Copilot host session open while work runs. Check status later; do not submit another operation. Persisted checkpoints survive a host exit."
         elif job["stage"] == "scan":
-            result["next_action"] = "Review individual disclosures in the private Studio and save choices before generation."
+            result["next_action"] = "Choose how to handle individual disclosures in Studio, then click Generate spec."
         else:
             result["next_action"] = "Inspect selected deliverables locally. Publication requires final-file and destination approval in the Studio."
         if job["status"] == "done" and job["stage"] in {"publish", "verify"}:

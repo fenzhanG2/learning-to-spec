@@ -117,6 +117,33 @@ class PrivateSharingTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 load_package(root)
 
+    def test_destination_preview_neither_approves_nor_uploads(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            manifest, files = self.fixture(root)
+            client = Client(files)
+            plan = destination_plan(root, "preview-only", client, preview=True)
+            self.assertEqual(client.writes, [])
+            self.assertFalse((root / "approval.json").exists())
+            with self.assertRaises(OSError):
+                publish_package(root, plan, plan["plan_id"], client)
+            self.assertEqual(client.writes, [])
+            self.assertFalse((root / "publication.json").exists())
+
+    def test_upload_action_approves_without_claiming_every_file_was_read(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            manifest, files = self.fixture(root, findings=[{"id": "F1"}])
+            client = Client(files)
+            plan = destination_plan(root, "explicit-click", client, preview=True)
+            for confirmed, findings in [(False, ["F1"]), ("true", ["F1"]), (True, [])]:
+                with self.assertRaises(ValueError):
+                    approve_package(root, manifest["package_id"], findings, confirmed_publish=confirmed)
+            approval = approve_package(root, manifest["package_id"], ["F1"], confirmed_publish=True)
+            self.assertFalse(approval["reviewed_all_files"])
+            self.assertTrue(approval["confirmed_publish"])
+            self.assertEqual(publish_package(root, plan, plan["plan_id"], client)["status"], "verified")
+
     def test_bytes_changed_between_validation_and_zip_are_refused(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

@@ -17,7 +17,7 @@ Use the **learning-to-spec MCP tools**, not shell orchestration or hand-written 
 
 ## Generate and continue
 
-The user can generate in Studio, or select **Save choices & allow Copilot to generate**, then ask you to call `generate(job)`. You cannot create approvals through MCP. Recognized credentials, hidden reasoning and binary payloads are always removed. Other findings need individual keep/remove/pseudonymize/generalize choices. Technical failures, corrections and verification limits must remain truthful.
+The user chooses how to handle each finding, then clicks **Generate spec** in Studio. This single action saves their choices and starts generation; no review checkbox or return-to-chat step is needed. You cannot create approvals through MCP. The native `generate(job)` tool can explicitly retry an interrupted, previously approved generation. Recognized credentials, hidden reasoning and binary payloads are always removed. Other findings need individual keep/remove/pseudonymize/generalize choices. Technical failures, corrections and verification limits must remain truthful.
 
 Generation uses the authenticated Copilot CLI and quota even for local delivery. Only approved reduced input reaches drafting. Do not send original content as a fallback or invent internal reasoning; preserve observable decisions and evidence.
 

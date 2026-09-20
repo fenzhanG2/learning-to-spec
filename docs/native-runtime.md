@@ -35,6 +35,8 @@ The background service starts lazily. `~/.learning-to-spec/runtime/<profile-hash
 
 There is no MCP approval shortcut, arbitrary filesystem read, shell execution or raw-review tool. Individual disclosure approval and final upload confirmation happen in the human-controlled Studio. Having an Agent make privacy choices would defeat the product. The rest is code-driven E2E, not instructions asking a model to join scripts together.
 
+Studio uses progressive disclosure: Choose, Protect, Use & share. The single **Generate spec** action saves explicit per-finding choices and starts work; there is no separate save/allow button or review-attestation checkbox. Optional contextual review is a clearly labeled opt-in selection, with its cloud-disclosure notice next to the action. Upload preparation and destination checks are read-only previews, not approval. The final Upload click approves the exact package and displayed plan; residual findings still require individual choices. The receipt distinguishes a publish-action approval from the legacy CLI reviewed-all-files attestation. Planning never authorizes publication.
+
 ## Recovery
 
 `job.json` is atomically replaced at operation start/completion and after synchronous approvals. It contains private decisions and paths and must never be published. Stage/status/time history contains no session text. Source, baseline, review, decisions, delivery, package and remote plan have separate hashes.

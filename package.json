@@ -1,7 +1,7 @@
 {
   "name": "learning-to-spec-renderer",
   "private": true,
-  "version": "0.6.0",
+  "version": "0.6.1",
   "scripts": {
     "build": "node scripts/build_renderer.cjs"
   },
