@@ -48,6 +48,8 @@ agent_markdown 覆盖有效目标与约束、产物/入口/依赖、关键参数
 
 ## 图与结尾
 
+Graph node IDs must match `[a-z][a-z0-9-]*`: lowercase letters, digits and hyphens, no underscores. Edge from/to values refer to those exact IDs. These are internal identifiers, not reader-language labels.
+
 架构只画材料支持的最终产物结构，或实际实现流程，选其一；无足够职责和有向关系就 omit，不画通用占位图。包含 2–9 个节点和 1–12 条边，每项有支持其事实的来源；implementation 只表示落地代码/配置，observation 需要对应运行观察。反馈虚线表示返回方向，不表示未验证。多个独立系统不串成虚假调用链，定位在相关机制章节后。
 
 closing 用 1–3 个真实转折锚定 1–3 段自然收束，回扣主要工作线，表达认识变化和适用边界，不新增成果。内部 principle/applicability/non_claim 不逐项照抄成可见正文。

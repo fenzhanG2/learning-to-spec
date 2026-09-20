@@ -1,7 +1,7 @@
 import re
 
 
-SCHEMA = "review-focus/v3"
+SCHEMA = "review-focus/v4"
 
 
 def review_focus(edition):
@@ -32,7 +32,12 @@ def review_focus(edition):
                     or path.startswith("/brief/") and field in {"text", "kind"}
                     or path.startswith("/insights/closing/paragraphs/")
                     or path.startswith("/article/agent_detail/recipes/")
-                    and (field in {"when", "adapt", "avoid", "verify"} or "/procedure/" in path)):
+                    and (field in {"when", "adapt", "avoid", "verify"} or "/procedure/" in path)
+                    or path.startswith("/article/agent_detail/trajectory/")
+                    and field in {"summary", "purpose", "action", "finding", "decision", "text", "observation", "next_state"}
+                    or path.startswith("/article/agent_detail/paths/") and field == "reason"
+                    or path.startswith("/article/checks/") and field in {"observed", "limit"}
+                    or path.startswith("/insights/architecture/") and field in {"scope", "detail", "label", "evidence_summary", "limits"}):
                 mechanism_summaries.append({"path": path, "quote": value})
 
     for root in ("article", "insights", "brief"):

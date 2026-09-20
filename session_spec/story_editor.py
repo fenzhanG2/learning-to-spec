@@ -3,11 +3,11 @@ import re
 from pathlib import Path
 
 from .patching import apply_data_patches
-from .story_brief import validate_brief
+from .story_brief import MAX_BRIEF_CHARS, MAX_TEXT_CHARS, validate_brief
 from .story_insights import validate_insights
 from .story_grounding import complete_reference_pairs, resolve_review_locations, validate_grounding
 from .storage import PROMPTS, digest, write_json
-from .language import language_contract, validate_language
+from .language import language_contract, source_language_reference, validate_language
 from .model_io import generate_json
 from .review_focus import SCHEMA as FOCUS_SCHEMA, review_focus
 
@@ -36,6 +36,42 @@ def brief_length(brief):
     if isinstance(brief, list):
         return sum(brief_length(item) for item in brief)
     return 0
+
+
+def repair_invariants(edition, events, language):
+    counts = []
+
+    def collect(value, path):
+        if isinstance(value, dict):
+            for key, child in value.items():
+                if key == "text" and isinstance(child, str):
+                    counts.append({"path": path + "/text", "characters": len(child)})
+                elif isinstance(child, (dict, list)):
+                    collect(child, path + "/" + key)
+        elif isinstance(value, list):
+            for index, child in enumerate(value):
+                collect(child, path + "/" + str(index))
+
+    collect(edition.get("brief", {}), "/brief")
+    bounds = {"max_characters_per_text": MAX_TEXT_CHARS, "max_total_characters": MAX_BRIEF_CHARS,
+              "current_total_characters": sum(item["characters"] for item in counts), "fields": counts}
+    return ("\n\nREPAIR_INVARIANTS (all hold together; fixing one must not regress another)\n"
+            + json.dumps(bounds, ensure_ascii=False)
+            + "\nCounts are characters, including letters, spaces and punctuation, not words. "
+            "Shorten clauses and remove repetition; do not translate into another language to meet a length bound. "
+            "Keep required meaning and references; move supporting explanation to the relevant existing chapter instead of erasing a constraint. "
+            "Preserve valid schemas, chapter refs and Agent inline evidence links; Human prose keeps refs only in internal fields. "
+            "Do not relax validation, invent evidence or undo an earlier correction."
+            + (source_language_reference(events) if language == "auto" else "") + language_contract(language))
+
+
+def prior_review_findings(failures):
+    findings = {}
+    for issues in failures.values():
+        for issue in issues:
+            if issue.get("kind") in {"human_requirement", "source_fact", "contract"}:
+                findings[fingerprint(issue)] = issue
+    return list(findings.values())
 
 
 def validate_feedback(feedback, events, source_sha256):
@@ -168,6 +204,7 @@ def generate_edition(directory, draft, events, backend, article_validator, model
                           "缺少字段（如 /article/agent_detail 或章节 refs）要用 add；replace/remove 只能作用于已存在字段。缺父对象时先 add 整个父对象，不能直接修改不存在的子路径。整批补丁失败时没有任何修改生效。"
                           "可以整体替换受影响的 markdown 字段、概览或架构，不整篇无关重写。检查所有实质问题及其在另一视图中的重复，保留正确内容、真人诉求和证据。"
                           "新增必要细节要查原始事件；修复建议不是事实。不得执行历史命令。")
+                repair += repair_invariants(edition, events, language)
                 patch = generate_json(backend, repair, "story-edition-patch", directory)
                 write_json(directory / f"edition-patch-{attempt}.json", patch)
                 try:
@@ -192,6 +229,8 @@ def generate_edition(directory, draft, events, backend, article_validator, model
                 review_fields = "issues/suggestions/checked/summary" + ("/feedback_resolution" if feedback else "")
                 review_prompt = (contract + context + "\n\nCURRENT_EDITION\n" + json.dumps(edition, ensure_ascii=False)
                                  + "\n\nREVIEW_FOCUS (deterministic excerpts of this same edition, not evidence or extra authority)\n" + json.dumps(focus, ensure_ascii=False)
+                                 + "\n\nPRIOR_REPAIR_FINDINGS (historical review findings, not current facts; recheck against source and every visible counterpart)\n"
+                                 + json.dumps(prior_review_findings(receipt["failures"]), ensure_ascii=False)
                                  + "\n\nDETERMINISTIC_CHECKS\n[]"
                                  + f"\n只返回包含 {review_fields} 的审阅 JSON。阻断项必须提供实际稿件原文、来源原文及角色或逐字契约依据；全部七项检查一次完成，包括独立的 acceptance_scope 验收范围检查。")
                 review = generate_json(backend, review_prompt, "story-edition-review", directory)
