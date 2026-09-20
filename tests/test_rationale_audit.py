@@ -81,6 +81,8 @@ class RationaleAuditTests(unittest.TestCase):
         review["rationale_audit"][0]["evidence"] = [{"ref": "E000003", "origin": "assistant", "quote": "I later realized this preserves the startup path."}]
         errors = validate_rationale_audit(review, rationale_focus(draft, events), events)
         self.assertTrue(any("later-phase source" in error for error in errors))
+        review["rationale_audit"][0]["timing"] = {"assessment": "retrospective", "note": "The source says the actor only realized this later."}
+        self.assertTrue(validate_rationale_audit(review, rationale_focus(draft, events), events))
         phases[0]["rationale"]["basis"] = "inferred"
         review["rationale_audit"][0]["assessment"] = "inference"
         self.assertEqual(validate_rationale_audit(review, rationale_focus(draft, events), events), [])
@@ -102,6 +104,42 @@ class RationaleAuditTests(unittest.TestCase):
         self.assertTrue(focus["rationales"][0]["overlapping_phase_anchors"])
         self.assertIsNone(focus["rationales"][0]["next_phase_start"])
         self.assertEqual(validate_rationale_audit(audit(), focus, events), [])
+
+    def test_shared_transition_reason_needs_no_duplicate_aggregate_citation(self):
+        draft, events = fixture()
+        events.append({"ref": "E000003", "type": "assistant.message",
+                       "text": "I will keep the wrapper because it preserves the existing startup path. Next I will validate the handoff."})
+        phases = draft["article"]["agent_detail"]["trajectory"]
+        phases[0]["rationale"] = {"basis": "recorded", "text": "At the transition the assistant chose the wrapper to preserve startup.", "refs": ["E000003"]}
+        following = copy.deepcopy(phases[0])
+        following.update(id="next-phase", refs=["E000003"], human_refs=[], tool_refs=[], tool_steps=[],
+                         rationale={"basis": "not_recorded", "text": "", "refs": []})
+        phases.append(following)
+        review = audit()
+        row = review["rationale_audit"][0]
+        row["evidence"] = [{"ref": "E000003", "origin": "assistant", "quote": "I will keep the wrapper because it preserves the existing startup path."}]
+        row["timing"] = {"assessment": "shared_transition", "note": "The same message expresses the wrapping reason and then starts validation; the claim attributes it to that transition."}
+        for duplicate in (False, True):
+            with self.subTest(duplicate=duplicate), tempfile.TemporaryDirectory() as temporary:
+                candidate = copy.deepcopy(draft)
+                if duplicate:
+                    candidate["article"]["agent_detail"]["trajectory"][0]["refs"].append("E000003")
+                self.assertEqual(validate_article(candidate["article"], events), [])
+                self.assertEqual(validate_rationale_audit(review, rationale_focus(candidate, events), events), [])
+                backend = FakeBackend([review])
+                self.assertEqual(generate_edition(Path(temporary), candidate, events, backend, validate_article), candidate)
+                self.assertEqual(len(backend.calls), 1)
+
+    def test_temporal_adjudication_does_not_excuse_false_source_or_role(self):
+        draft, events = fixture()
+        phases = draft["article"]["agent_detail"]["trajectory"]
+        events.append({"ref": "E000003", "type": "assistant.message", "text": "An observable transition."})
+        phases[0]["rationale"]["refs"] = ["E000003"]
+        phases.append({"id": "next", "refs": ["E000003"], "rationale": {"basis": "not_recorded"}})
+        review = audit()
+        review["rationale_audit"][0]["timing"] = {"assessment": "shared_transition", "note": "A claimed shared boundary is not proof of the quote."}
+        review["rationale_audit"][0]["evidence"] = [{"ref": "E000003", "origin": "assistant", "quote": "An invented transition."}]
+        self.assertTrue(validate_rationale_audit(review, rationale_focus(draft, events), events))
 
     def test_missing_duplicate_and_unknown_rows_fail_closed(self):
         draft, events = fixture()

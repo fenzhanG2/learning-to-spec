@@ -2,7 +2,7 @@ from .source_excerpt import excerpt_segments, payload_text, source_payload
 from .story_grounding import quote_basis
 
 
-SCHEMA = "rationale-audit/v1"
+SCHEMA = "rationale-audit/v2"
 ASSESSMENTS = {"expressed_reason", "inference", "action_or_result_only", "retrospective", "unsupported"}
 MAX_SOURCE_CHARS = 12000
 
@@ -42,7 +42,8 @@ def rationale_focus(edition, events):
                         "tool": event.get("tool"), "characters": len(text), "truncated": len(text) > limit, "segments": segments})
     return {"schema": SCHEMA, "rationales": rows, "sources": sources, "omitted_source_refs": omitted,
             "limit": "Every retained phase rationale is audited; not_recorded has no claimed rationale. Quotes are from reduced observable payloads only. "
-                     "The next phase boundary uses authored source anchors, not reconstructed hidden thinking or proof of non-overlapping work. "
+                     "The next phase boundary uses incomplete authored source anchors, not a hard phase extent or proof of backdating. "
+                     "A cited transition can close one decision and open the next; potential later refs require explicit temporal adjudication. "
                      "Overlapping anchors have no automatic cutoff; review their real chronology rather than infer one. "
                      "Excerpt limits and omitted source refs are explicit; consult the full historical events before deciding. "
                      "Literal support and a model assessment are not an entailment proof."}
@@ -83,8 +84,13 @@ def validate_rationale_audit(review, focus, events):
                 errors.append(prefix + "source span must be short, literal and match the observable source role")
             if status == "supported" and reference not in row["refs"]:
                 errors.append(prefix + "support is absent from the rationale's declared refs; repair the authored record first")
-            if status == "supported" and row["basis"] == "recorded" and reference in row["later_refs"]:
-                errors.append(prefix + "a later-phase source cannot silently establish an earlier recorded rationale")
+        if status == "supported" and row["basis"] == "recorded" and any(isinstance(span, dict) and span.get("ref") in row["later_refs"] for span in support):
+            timing = item.get("timing")
+            if (not isinstance(timing, dict) or timing.get("assessment") not in ("shared_transition", "overlapping_phase")
+                    or not isinstance(timing.get("note"), str) or not timing["note"].strip()):
+                errors.append(prefix + "potential later-phase source requires an explicit timing assessment and note: shared_transition or overlapping_phase "
+                              "can support a correctly attributed reason; retrospective/uncertain cannot establish an earlier recorded motive. "
+                              "Aggregate citations are not exclusive phase boundaries; do not invent a defect merely to satisfy this check")
         if status == "supported":
             required = "expressed_reason" if row["basis"] == "recorded" else "inference"
             if assessment != required:
