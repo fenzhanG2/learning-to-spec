@@ -215,7 +215,8 @@ def generate_edition(directory, draft, events, backend, article_validator, model
                           + structure_contract + "\n\nCURRENT_EDITION\n" + json.dumps(edition, ensure_ascii=False)
                           + "\n\nISSUES_TO_VERIFY_AND_REPAIR\n" + json.dumps(errors, ensure_ascii=False)
                           + "\n现在执行修复而非审阅：只返回 {\"patches\":[{\"op\":\"replace\",\"path\":\"/article/title\",\"value\":\"修复后的标题\"}]}。"
-                          "只允许 article/insights/brief 下的 add/replace/remove 数据补丁，不写外部文件。若初稿 schema 错误，必须修正为契约要求的既有版本；不得发明新版本或通过降级 schema 绕过校验。"
+                          "只允许 article/insights/brief 下的 add/replace/remove/replace_text 数据补丁，不写外部文件。若初稿 schema 错误，必须修正为契约要求的既有版本；不得发明新版本或通过降级 schema 绕过校验。"
+                          "局部文字纠正优先用原文锚定操作：{\"op\":\"replace_text\",\"path\":\"/article/chapters/0/markdown\",\"old\":\"该字段内唯一的连续原文\",\"value\":\"纠正后的文字\"}。old必须逐字匹配且仅出现一次；其余文字由程序原样保留，不重写相邻章节。数组从0开始；路径错、原文过期或歧义时整批拒绝，不自动跳到别的字段。"
                           "路径必须对应 CURRENT_EDITION 的实际树：Agent 为 /article/agent_markdown，架构与结尾为 /insights/architecture 和 /insights/closing，开篇概览为 /brief；不是 /agent_markdown 或 /article/insights。"
                           "缺少字段（如 /article/agent_detail 或章节 refs）要用 add；replace/remove 只能作用于已存在字段。缺父对象时先 add 整个父对象，不能直接修改不存在的子路径。整批补丁失败时没有任何修改生效。"
                           "可以整体替换受影响的 markdown 字段、概览或架构，不整篇无关重写。检查所有实质问题及其在另一视图中的重复，保留正确内容、真人诉求和证据。"

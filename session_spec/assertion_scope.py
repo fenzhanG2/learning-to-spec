@@ -4,13 +4,16 @@ import warnings
 
 from .review_crosswalk import cited_claims
 from .source_excerpt import excerpt_segments, read_display_text, source_payload
-from .story_grounding import text_values
+from .story_grounding import pointer_value, text_values
 
 
-SCHEMA = "assertion-scope/v2"
+SCHEMA = "assertion-scope/v4"
 MAX_PAYLOAD_CHARS = 40000
 MAX_INDEX_CHARS = 24000
 MAX_ASSERTIONS = 24
+MAX_CLAIMS = 8
+FACT_FIELDS = {"finding", "observed", "observation", "verification_boundary", "precondition", "expected", "done_when", "avoid", "adapt", "reuse_condition", "markdown", "agent_markdown"}
+NAVIGATION_FIELDS = {"title", "subtitle", "kind", "label", "purpose", "scope"}
 RELATIONS = {
     "endswith": ("suffix predicate", "A suffix check permits an additional prefix; it does not establish whole-value equality.", "prefix_sample", "sample"),
     "startswith": ("prefix predicate", "A prefix check permits an additional suffix; it does not establish whole-value equality.", "sample_suffix", "sample"),
@@ -91,21 +94,35 @@ def assertion_scope(edition, events):
                        "Assertions may be conditional or unreachable; source presence is not a passing test. Method names may be "
                        "custom: resolve receiver semantics before using the builtin-string examples. Examples illustrate a logical "
                        "non-implication, never historical inputs, outputs or execution evidence. Negated/compound/unsupported "
-                       "predicates and other languages remain in the full source, not silently proved. Verify all authored counterparts."}
+                       "predicates and other languages remain in the full source, not silently proved. Claims are unique whole "
+                       "authored fields, not isolated citation paragraphs: references may support only part of each field. "
+                       "Substantive findings/preconditions precede navigation labels. Verify all authored counterparts."}
     for item in candidates:
         matching = [claim for claim in claims if item["ref"] in claim["refs"]]
-        surfaces = {}
+        fields = {}
         for claim in matching:
+            if claim["path"] not in fields:
+                fields[claim["path"]] = {"path": claim["path"], "quote": pointer_value(edition, claim["path"]), "reference_count": len(claim["refs"])}
+            else:
+                fields[claim["path"]]["reference_count"] = min(fields[claim["path"]]["reference_count"], len(claim["refs"]))
+        surfaces = {}
+        for claim in fields.values():
             parts = claim["path"].split("/")
             depth = 4 if parts[1:3] == ["article", "agent_detail"] else 3
             surfaces.setdefault("/".join(parts[:depth]), []).append(claim)
+        def priority(claim):
+            field = claim["path"].rsplit("/", 1)[-1]
+            return (0 if field in FACT_FIELDS else 2 if field in NAVIGATION_FIELDS else 1, claim["reference_count"])
+        for pending in surfaces.values():
+            pending.sort(key=priority)
         selected = []
-        while any(surfaces.values()) and len(selected) < 4:
+        while any(surfaces.values()) and len(selected) < MAX_CLAIMS:
             for pending in surfaces.values():
-                if pending and len(selected) < 4:
+                if pending and len(selected) < MAX_CLAIMS:
                     claim = pending.pop(0)
-                    selected.append({"path": claim["path"], "segments": excerpt_segments(claim["quote"], 900)})
-        item.update(claims=selected, omitted_claims=len(matching) - len(selected))
+                    selected.append({"path": claim["path"], "characters": len(claim["quote"]), "truncated": len(claim["quote"]) > 900,
+                                     "segments": excerpt_segments(claim["quote"], 900)})
+        item.update(claims=selected, matching_fields=len(fields), matching_citation_parts=len(matching), omitted_claims=len(fields) - len(selected))
         result["assertions"].append(item)
         if len(json.dumps(result, ensure_ascii=False)) > MAX_INDEX_CHARS:
             result["assertions"].pop()

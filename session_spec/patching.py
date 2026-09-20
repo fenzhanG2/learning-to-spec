@@ -8,14 +8,26 @@ def apply_spec_patches(spec, response):
     return apply_data_patches(spec, response, SCHEMA)
 
 
+def replace_anchored_text(current, patch):
+    old, value = patch.get("old"), patch.get("value")
+    if not isinstance(current, str) or not isinstance(old, str) or not old or not isinstance(value, str):
+        raise ValueError("replace_text needs an existing string target, nonempty literal old text and string value.")
+    position = current.find(old)
+    if position < 0:
+        raise ValueError("replace_text old text does not occur at this exact target; recheck the zero-based path and original text.")
+    if current.find(old, position + 1) >= 0:
+        raise ValueError("replace_text old text is ambiguous at this target; include more literal surrounding context.")
+    return current[:position] + value + current[position + len(old):]
+
+
 def apply_data_patches(spec, response, allowed_roots):
     patches = response.get("patches") if isinstance(response, dict) else None
     if not isinstance(patches, list) or not patches or len(patches) > 150:
         raise ValueError("Expected between 1 and 150 bounded spec patches.")
     result = copy.deepcopy(spec)
     for patch_number, patch in enumerate(patches, 1):
-        if not isinstance(patch, dict) or patch.get("op") not in {"add", "replace", "remove"}:
-            raise ValueError("Only add, replace and remove data operations are allowed.")
+        if not isinstance(patch, dict) or patch.get("op") not in {"add", "replace", "remove", "replace_text"}:
+            raise ValueError("Only add, replace, remove and replace_text data operations are allowed.")
         path = patch.get("path")
         if not isinstance(path, str) or not path.startswith("/") or re.search(r"~(?![01])", path):
             raise ValueError("Invalid JSON pointer in spec patch.")
@@ -50,6 +62,8 @@ def apply_data_patches(spec, response, allowed_roots):
                     parent.insert(index, copy.deepcopy(patch["value"]))
                 elif operation == "replace":
                     parent[index] = copy.deepcopy(patch["value"])
+                elif operation == "replace_text":
+                    parent[index] = replace_anchored_text(parent[index], patch)
                 else:
                     parent.pop(index)
             elif isinstance(parent, dict):
@@ -58,6 +72,8 @@ def apply_data_patches(spec, response, allowed_roots):
                     raise ValueError("Spec patch targets a missing field." + advice)
                 if operation == "remove":
                     del parent[key]
+                elif operation == "replace_text":
+                    parent[key] = replace_anchored_text(parent[key], patch)
                 else:
                     parent[key] = copy.deepcopy(patch["value"])
             else:

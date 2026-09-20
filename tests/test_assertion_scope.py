@@ -8,7 +8,7 @@ from session_spec.assertion_scope import MAX_ASSERTIONS, MAX_INDEX_CHARS, MAX_PA
 from session_spec.story_article import validate_article
 from session_spec.story_editor import generate_edition
 from session_spec.source_excerpt import read_display_text
-from session_spec.story_grounding import quote_basis
+from session_spec.story_grounding import pointer_value, quote_basis
 from test_story_pipeline import FakeBackend, article, brief, edition_review, insights, packet
 
 
@@ -36,6 +36,45 @@ class AssertionScopeTests(unittest.TestCase):
         output = assertion_scope({}, [source(text)])
         self.assertEqual([row["relation"] for row in output["assertions"]], ["prefix predicate", "membership predicate", "equality predicate"])
         self.assertNotIn("hypothetical_builtin_string_example", output["assertions"][2])
+
+    def test_later_trajectory_and_recipe_counterparts_are_not_omitted_after_four_surfaces(self):
+        ref = ["E000003"]
+        edition = {"article": {"chapters": [{"markdown": "Human claim", "refs": ref}], "agent_markdown": "Mechanism E000003",
+                               "checks": [{"observed": "Check claim", "refs": ref}], "agent_detail": {
+                                   "resume": {"checkpoint": "Resume claim", "refs": ref},
+                                   "continuation": [{"action": "Continue claim", "refs": ref}],
+                                   "recipes": [{"adapt": "Recipe claim", "refs": ref}],
+                                   "trajectory": [{"observation": "Contradictory trajectory", "refs": ref}]}}}
+        output = assertion_scope(edition, [source("assert result.endswith('sample')")])
+        paths = {claim["path"] for claim in output["assertions"][0]["claims"]}
+        self.assertIn("/article/agent_detail/trajectory/0/observation", paths)
+        self.assertIn("/article/agent_detail/recipes/0/adapt", paths)
+        self.assertEqual(output["assertions"][0]["omitted_claims"], 0)
+
+    def test_substantive_fields_displace_navigation_and_citation_paragraph_duplicates(self):
+        ref = ["E000003"]
+        body = "Intro paragraph.\n\n" + "Context. " * 160 + "\n\nFinal assertion-scope claim."
+        edition = {"article": {"chapters": [{"title": "Navigation title", "markdown": body, "refs": ref}],
+                               "checks": [{"question": "Check?", "observed": "Observed claim", "refs": ref}],
+                               "agent_detail": {"trajectory": [{"title": "Phase title", "refs": ref,
+                                   "tool_steps": [{"purpose": "Step purpose", "tool_refs": ref,
+                                       "usage": [{"tool": "Read", "action": "Read tests", "refs": ref}],
+                                       "finding": "The actual observation", "decision": "Local decision", "refs": ref}]}],
+                                   "continuation": [{"steps": [{"kind": "inspect", "action": "Read first", "precondition": "Current authority required", "refs": ref}]}]}}}
+        output = assertion_scope(edition, [source("assert result.endswith('sample')")])
+        row = output["assertions"][0]
+        claims = {claim["path"]: claim for claim in row["claims"]}
+        self.assertIn("/article/agent_detail/trajectory/0/tool_steps/0/finding", claims)
+        self.assertIn("/article/agent_detail/continuation/0/steps/0/precondition", claims)
+        human = claims["/article/chapters/0/markdown"]
+        self.assertTrue(human["truncated"])
+        self.assertIn("Final assertion-scope claim.", human["segments"][-1]["text"])
+        for claim in row["claims"]:
+            value = pointer_value(edition, claim["path"])
+            self.assertTrue(all(value[segment["start"]:segment["end"]] == segment["text"] for segment in claim["segments"]))
+        self.assertEqual(len(claims), len(row["claims"]))
+        self.assertGreater(row["matching_citation_parts"], row["matching_fields"])
+        self.assertEqual(row["matching_fields"], len(claims) + row["omitted_claims"])
 
     def test_no_source_execution_or_docstring_comment_execution_claim(self):
         text = 'raise RuntimeError("NEVER_EXECUTE")\n"""assert text.endswith("docstring")"""\n# assert text.endswith("comment")\nif False:\n    assert result.endswith("sample")'
