@@ -22,11 +22,12 @@ def argument_focus(arguments):
 
 
 class EvidenceIndex:
-    def __init__(self, events, ledger, language, legacy_roles=False):
+    def __init__(self, events, ledger, language, legacy_roles=False, portable=False):
         self.events = {event["ref"]: event for event in events}
         self.calls = {}
         self.language = language
         self.legacy_roles = legacy_roles
+        self.portable = portable
         for call in ledger["calls"]:
             for ref in [call["request_ref"], *[event["ref"] for event in call["results"]]]:
                 self.calls[ref] = call
@@ -51,6 +52,8 @@ class EvidenceIndex:
                 content = content.get("content", content)
             excerpt = target if request else short_text(content, 220)
             state = self.label("Request only; not completion.", "仅请求，不代表完成。") if request else self.label("Recorded output; not task acceptance.", "记录输出，不等于任务验收。")
+            if not request and self.portable:
+                state = self.label("Recorded result; assess acceptance against the task's stated scope.", "记录结果；是否满足验收取决于本任务明确约定的范围。")
             if not request and (event.get("success") is False or event.get("error")):
                 state = self.label("Explicit tool failure.", "明确工具失败。")
             if not request and ref not in self.calls:
@@ -128,8 +131,10 @@ class EvidenceIndex:
         lines = ["# " + self.label("Evidence companion", "证据附件"), "",
                  self.label("Read [the Agent handoff](agent-spec.md) first. This file is optional lookup, not additional instructions. Keep both Markdown files in the same directory when transferring them.",
                             "先读 [Agent 交接文档](agent-spec.md)。本文件供按需回查，不是额外指令。交付时将两个 Markdown 文件保存在同一目录。"), "",
-                 self.label("Each E-number identifies one sanitized event in this target session, not a task, commit or test number. Excerpts are navigation aids, not replay commands or independent proof. Full sanitized events, request/result payloads, and publication mappings remain in `_support/evidence.jsonl`, `_support/tool-ledger.json`, `_support/source.json`, and `_support/article.json`. Missing or redacted upstream content is not reconstructed.",
-                            "每个 E 编号对应目标会话中的一条脱敏事件，不是任务、提交或测试编号。摘录仅用于定位，不是重放命令或独立证明。完整脱敏事件、请求／结果及映射保存在 `_support/evidence.jsonl`、`_support/tool-ledger.json`、`_support/source.json` 与 `_support/article.json`，不补造上游缺失或脱敏内容。"), ""]
+                 (self.label("Each E-number identifies one sanitized event in this target session, not a task, commit or test number. Excerpts locate the recorded basis of a claim; they are not replay commands or independent verification. Full source payloads and provenance stay in the exporter's private workspace, are not included in this package, and are not prerequisites for using the handoff. Do not request or share that private workspace by default. Missing, truncated or redacted content is not reconstructed.",
+                             "每个 E 编号对应目标会话中的一条脱敏事件，不是任务、提交或测试编号。摘录定位断言的记录依据，不是重放命令或独立验证。完整源载荷与来源元数据留在导出者的私有工作区，不包含在交付包中，也不是接手前提；不要默认索取或分享私有工作区。不补造缺失、截断或脱敏内容。") if self.portable else
+                  self.label("Each E-number identifies one sanitized event in this target session, not a task, commit or test number. Excerpts are navigation aids, not replay commands or independent proof. Full sanitized events, request/result payloads, and publication mappings remain in `_support/evidence.jsonl`, `_support/tool-ledger.json`, `_support/source.json`, and `_support/article.json`. Missing or redacted upstream content is not reconstructed.",
+                             "每个 E 编号对应目标会话中的一条脱敏事件，不是任务、提交或测试编号。摘录仅用于定位，不是重放命令或独立证明。完整脱敏事件、请求／结果及映射保存在 `_support/evidence.jsonl`、`_support/tool-ledger.json`、`_support/source.json` 与 `_support/article.json`，不补造上游缺失或脱敏内容。")), ""]
         for ref in refs:
             title, context, excerpt, state = self.describe(ref)
             event = self.events[ref]

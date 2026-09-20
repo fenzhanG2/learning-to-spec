@@ -10,9 +10,10 @@ PRESENTATION = {"schema": "agent-presentation/v2", "mode": "markdown-files"}
 def render_agent_package(article, events, language, trajectory_style=None):
     markdown = render_agent(article, events, language, trajectory_style)
     files = {"agent-spec.md": markdown}
-    separate = trajectory_style == "handoff-split" or trajectory_style is None and article.get("agent_detail", {}).get("schema") == "agent-detail/v3"
+    portable = trajectory_style == "handoff-portable" or trajectory_style is None and article.get("agent_detail", {}).get("schema") == "agent-detail/v3"
+    separate = trajectory_style == "handoff-split" or portable
     if separate:
-        files["evidence.md"] = EvidenceIndex(events, tool_ledger(events), language).companion(markdown)
+        files["evidence.md"] = EvidenceIndex(events, tool_ledger(events), language, portable=portable).companion(markdown)
     return files
 
 

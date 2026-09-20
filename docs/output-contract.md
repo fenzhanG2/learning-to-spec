@@ -49,7 +49,7 @@
 
 ## Agent Markdown：让没参与会话的 Agent 正确接手
 
-新发布采用 `story-output/v9`、`agent-detail/v3`、`evidence_renderer: companion/v2` 和 `agent-presentation/v2` 的 `markdown-files` 模式，旧版渲染保持兼容。两版默认自然沿用源会话真人交流的语言，不向模型指定某一种目标语言，也不按自动检测结果强制翻译正文；仅在导出用户显式传入 `--language` 时才指定目标语言。提示词和旧底稿的语言不决定输出。自动检测仅用于 HTML 元数据与固定界面标签，不是正文生成约束。人读版仍是技术故事，Agent 版是可操作交接，不套用人读版的压缩预算。
+新发布采用 `story-output/v9`、`agent-detail/v3`、`evidence_renderer: companion/v3` 和 `agent-presentation/v2` 的 `markdown-files` 模式，旧版渲染保持兼容。证据附件明确完整源载荷仅存于导出者的私有工作区，不在交付包中，也不应默认索取；验收按任务约定的范围判断，不把每条成功工具结果一概标为“不是验收”。旧 `companion/v1`、`companion/v2` 按原策略重算校验，呈现刷新另存新版，不重写历史文件。两版默认自然沿用源会话真人交流的语言，不向模型指定某一种目标语言，也不按自动检测结果强制翻译正文；仅在导出用户显式传入 `--language` 时才指定目标语言。提示词和旧底稿的语言不决定输出。自动检测仅用于 HTML 元数据与固定界面标签，不是正文生成约束。人读版仍是技术故事，Agent 版是可操作交接，不套用人读版的压缩预算。
 
 `article.agent_markdown` 承载工作约定与机制地图，`article.agent_detail` 承载 resume、continuation、recipes、trajectory 和 paths；共同接受整稿复核。发布器在一级标题后插入接手起点。tool_steps 是语义步骤，不是调用列表，每步有 1–4 项 usage 摘要：真实工具、具体对象/操作和工具事件 refs；工具名必须能由所引事件核对。finding 交代实际结果与边界，decision 交代判断，不能只列工具名。完整参数/日志仍归档而不倾倒；关键失败、纠正、参数和复现入口不能因精简而消失。
 
