@@ -13,7 +13,7 @@ from unittest.mock import patch
 from session_spec.delivery import deliver
 from session_spec.mcp_server import Server, TOOLS, validate_call
 from session_spec.reduction import apply_review, load_review
-from session_spec.runtime import DurableStudio, FileLease, LocalClient
+from session_spec.runtime import DurableStudio, FileLease, LocalClient, runtime_root
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -63,6 +63,25 @@ class NativeProtocolTests(unittest.TestCase):
         self.assertEqual(notifications[0]["method"], "notifications/progress")
         self.assertEqual(notifications[0]["params"]["progressToken"], "progress-1")
         self.assertNotIn("isError", response["result"])
+
+    def test_failed_stage_is_not_reported_as_successful_tool(self):
+        class FailedClient:
+            def call(self, name, arguments, **options):
+                return {"status": "error", "next_action": "Inspect privately"}
+        server = Server(FailedClient())
+        server.handle({"jsonrpc": "2.0", "id": 1, "method": "initialize"})
+        response = server.handle({"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {"name": "health"}})
+        self.assertTrue(response["result"]["isError"])
+        invalid = server.handle({"jsonrpc": "2.0", "id": {}, "method": "ping"})
+        self.assertEqual(invalid["error"]["code"], -32600)
+
+    def test_profiles_do_not_share_runtime_or_approvals(self):
+        environment = {key: value for key, value in os.environ.items() if key != "LEARNING_TO_SPEC_HOME"}
+        with patch.dict(os.environ, environment, clear=True):
+            with patch.dict(os.environ, {"COPILOT_HOME": str(ROOT / "test-profile-one")}):
+                first = runtime_root()
+            with patch.dict(os.environ, {"COPILOT_HOME": str(ROOT / "test-profile-two")}):
+                self.assertNotEqual(first, runtime_root())
 
     def test_real_stdio_has_protocol_only_stdout(self):
         messages = [{"jsonrpc": "2.0", "id": 1, "method": "initialize"},

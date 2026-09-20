@@ -80,6 +80,8 @@ class Server:
         if "id" not in request:
             return None
         identifier = request["id"]
+        if type(identifier) not in {str, int}:
+            return {"jsonrpc": "2.0", "id": None, "error": {"code": -32600, "message": "Invalid request ID"}}
         response = {"jsonrpc": "2.0", "id": identifier}
         method = request["method"]
         params = request.get("params", {})
@@ -107,7 +109,10 @@ class Server:
                 if notify and token is not None:
                     progress = lambda value, message: notify({"jsonrpc": "2.0", "method": "notifications/progress", "params": {"progressToken": token, "progress": value, "message": message}})
                 result = self.client.call(name, arguments, progress=progress)
-                return {**response, "result": {"content": [{"type": "text", "text": json.dumps(result, ensure_ascii=False)}]}}
+                content = {"content": [{"type": "text", "text": json.dumps(result, ensure_ascii=False)}]}
+                if result.get("status") == "error":
+                    content["isError"] = True
+                return {**response, "result": content}
             except Exception:
                 return {**response, "result": {"isError": True, "content": [{"type": "text", "text": "Tool did not complete. Check arguments, job state and private Studio approvals. Private diagnostics are intentionally not sent to the model."}]}}
         return {**response, "error": {"code": -32601, "message": "Method not found"}}

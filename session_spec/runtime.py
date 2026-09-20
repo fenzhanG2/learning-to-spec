@@ -13,7 +13,6 @@ from datetime import datetime, timezone
 from http.server import ThreadingHTTPServer
 from pathlib import Path
 
-from .artifacts import ArtifactClient, verify_publication
 from .delivery import validate_delivery
 from .ingest import copilot_home, list_sessions, resolve_session
 from .reduction import digest, load_review
@@ -28,7 +27,9 @@ PATH_KEYS = {"directory", "review_directory", "generation", "package"}
 
 
 def runtime_root():
-    return Path(os.environ.get("LEARNING_TO_SPEC_HOME", str(Path.home() / ".learning-to-spec/runtime"))).expanduser().resolve()
+    profile = hashlib.sha256(str(copilot_home().resolve()).encode()).hexdigest()[:16]
+    default = Path.home() / ".learning-to-spec/runtime" / profile
+    return Path(os.environ.get("LEARNING_TO_SPEC_HOME", str(default))).expanduser().resolve()
 
 
 def timestamp():

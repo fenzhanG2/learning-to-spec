@@ -17,7 +17,7 @@ Copilot App / CLI
 
 The portable `mcp.json` follows [Agent Plugins 1.0](https://agent-plugins.org/schemas/1.0.0/mcp.schema.json); `.mcp.json` provides legacy integration. The host expands plugin-root variables. The Node launcher selects installed Python ≥3.10 without downloading dependencies. MCP is a protocol adapter, not a shell-command prompt; generation logs never enter its stdout.
 
-The background service starts lazily. `~/.learning-to-spec/runtime` stores private state outside the installation directory; `LEARNING_TO_SPEC_HOME` isolates tests. Existing local config supplies optional model, GitHub host and call budget. OS file leases serialize startup and prevent competing writers. The service binds only `127.0.0.1`, checks Host/Origin/capability, refuses cross-origin requests and never follows redirects with its capability.
+The background service starts lazily. `~/.learning-to-spec/runtime/<profile-hash>` stores private state outside the installation directory, scoped to the resolved Copilot home so different profiles cannot share jobs, inherited authentication or approvals. `LEARNING_TO_SPEC_HOME` explicitly overrides this root for tests. Existing local config supplies optional model, GitHub host and call budget. OS file leases serialize startup and prevent competing writers. The service binds only `127.0.0.1`, checks Host/Origin/capability, refuses cross-origin requests and never follows redirects with its capability.
 
 | Tool | Implemented behavior |
 | --- | --- |
