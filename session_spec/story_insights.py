@@ -67,7 +67,8 @@ def validate_insights(value, article, events):
                 errors.append("Invalid graph node")
                 continue
             identifier = node.get("id")
-            require(isinstance(identifier, str) and bool(re.fullmatch(r"[a-z][a-z0-9-]*", identifier)), "Invalid graph node id")
+            require(isinstance(identifier, str) and bool(re.fullmatch(r"[a-z][a-z0-9-]*", identifier)),
+                    f"Invalid graph node id at /insights/architecture/nodes/{node_index}/id: use [a-z][a-z0-9-]* (lowercase letters, digits and hyphens; no underscores). Update matching edge from/to fields together.")
             if isinstance(identifier, str):
                 ids.append(identifier)
             require(node.get("role") in ("入口", "控制", "处理", "存储", "产物", "外部"), "Invalid graph node role")

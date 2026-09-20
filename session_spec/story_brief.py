@@ -8,6 +8,8 @@ from .storage import PROMPTS, digest, write_json
 
 SCHEMA = "story-brief/v1"
 FIELDS = ("background", "problem", "goals", "approach", "non_goals", "scope", "constraints", "status")
+MAX_TEXT_CHARS = 300
+MAX_BRIEF_CHARS = 1400
 
 
 def validate_brief(value, events):
@@ -29,8 +31,8 @@ def validate_brief(value, events):
         content = item.get("text")
         if isinstance(content, str):
             visible.append(content)
-        if not isinstance(content, str) or not content.strip() or len(content) > 300:
-            errors.append("Missing or oversized brief text: /brief/" + location + "/text; limit=300 characters, actual=" + str(len(content) if isinstance(content, str) else None))
+        if not isinstance(content, str) or not content.strip() or len(content) > MAX_TEXT_CHARS:
+            errors.append("Missing or oversized brief text: /brief/" + location + f"/text; limit={MAX_TEXT_CHARS} characters, actual=" + str(len(content) if isinstance(content, str) else None))
         elif re.search(r"\bE\d{6}\b|<[^>]+>|\]\([^)]*\)", content):
             errors.append("Visible brief contains evidence IDs, markup or links: " + location)
         references = item.get("refs")
@@ -58,8 +60,8 @@ def validate_brief(value, events):
                 errors.append("Invalid brief constraint kind")
             statement(item, f"{field}/{index}", human=field in ("goals", "non_goals") or requirement,
                       exclusion=field == "non_goals", constraint=field == "constraints")
-    if sum(map(len, visible)) > 1400:
-        errors.append(f"/brief: visible text totals {sum(map(len, visible))} characters, above the hard 1400-character bound. Compress /brief toward 400–650; changing unused /article/opening cannot repair this.")
+    if sum(map(len, visible)) > MAX_BRIEF_CHARS:
+        errors.append(f"/brief: visible text totals {sum(map(len, visible))} characters, above the hard {MAX_BRIEF_CHARS}-character bound. Compress /brief toward 400–650; changing unused /article/opening cannot repair this.")
     return errors
 
 
