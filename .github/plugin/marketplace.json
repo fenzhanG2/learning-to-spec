@@ -1,12 +1,12 @@
 {
   "name": "learning-to-spec",
   "owner": {"name": "fenzhanG2"},
-  "metadata": {"description": "Privacy-reviewed Copilot session stories and Agent handoffs", "version": "0.6.18"},
+  "metadata": {"description": "Privacy-reviewed Copilot session stories and Agent handoffs", "version": "0.6.19"},
   "plugins": [
     {
       "name": "learning-to-spec",
       "description": "Export a Copilot session into a human HTML story, an Agent Markdown handoff, or both.",
-      "version": "0.6.18",
+      "version": "0.6.19",
       "source": "./"
     }
   ]
