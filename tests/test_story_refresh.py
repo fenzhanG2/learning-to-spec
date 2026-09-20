@@ -256,3 +256,22 @@ class StoryRefreshTests(unittest.TestCase):
             self.assertTrue(validate_story(destination)["valid"])
             self.assertNotIn("一段真实的技术工作", (destination / "human-spec.html").read_text(encoding="utf-8"))
             self.assertEqual(file_hash(support / "edition.json"), file_hash(destination / "_support/edition.json"))
+
+    def test_v4_companion_and_required_human_policy_remain_reproducible(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            output = self.make_story(Path(temporary))
+            support = output / "_support"
+            report = json.loads((support / "story-report.json").read_bytes())
+            report["evidence_renderer"] = "companion/v4"
+            for name, content in render_agent_package(article(), packet(), "zh-CN", "handoff-portable-v2").items():
+                (output / name).write_text(content, encoding="utf-8")
+                rendered = "agent-rendered.md" if name == "agent-spec.md" else "evidence-rendered.md"
+                (support / rendered).write_text(content, encoding="utf-8")
+            report["hashes"] = {name: file_hash(output / name) for name in report["hashes"]}
+            report["support_hashes"] = {name: file_hash(support / name) for name in report["support_hashes"]}
+            write_json(support / "story-report.json", report)
+            self.assertTrue(validate_story(output)["valid"])
+            (support / "human-presentation.json").unlink()
+            report["support_hashes"].pop("human-presentation.json")
+            write_json(support / "story-report.json", report)
+            self.assertIn("Human presentation policy is missing or invalid", validate_story(output)["issues"])
