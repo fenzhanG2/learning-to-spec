@@ -12,7 +12,7 @@ from session_spec.pipeline import write_json
 from session_spec.storage import file_hash
 from session_spec.story_pipeline import render_story, run_story, validate_story
 from session_spec.story_refresh import refresh_story
-from test_story_pipeline import FakeBackend, article, brief, edition_review, insights, packet
+from test_story_pipeline import FakeBackend, article, brief, edition_review, insights, packet, transfer_review
 
 
 @unittest.skipUnless(shutil.which("node"), "Node.js required for HTML rendering")
@@ -32,7 +32,7 @@ class StoryRefreshTests(unittest.TestCase):
         write_json(base / "source.json", {"source_path": str(source), "snapshot_bytes": source.stat().st_size,
                                           "source_sha256": hashlib.sha256(source.read_bytes()).hexdigest()})
         (base / "evidence.jsonl").write_text("\n".join(json.dumps(event) for event in packet()), encoding="utf-8")
-        backend = FakeBackend([{"article": article(), "brief": brief(), "insights": insights()}, edition_review()])
+        backend = FakeBackend([{"article": article(), "brief": brief(), "insights": insights()}, transfer_review(), edition_review()])
         output = root / "published"
         run_story(None, root / "copilot", output, from_export=base, backend_factory=lambda **settings: backend)
         return output

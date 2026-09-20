@@ -21,6 +21,7 @@ from .agent_handoff import render_agent, tool_ledger, validate_agent_detail
 from .agent_package import EVIDENCE_RENDERER, HUMAN_PRESENTATION, LEGACY_PRESENTATION, PRESENTATION, render_agent_package, write_agent_package
 from .language import resolve_language, validate_language
 from .story_revision import load_revision
+from .transfer_probe import effective_feedback
 
 
 RENDERER = Path(__file__).resolve().parent / "web/render-story.cjs"
@@ -129,7 +130,7 @@ def run_story(session, home, destination, from_export=None, model=None, gh_host=
                     errors.append("New Agent handoff must use agent-detail/v3 with resume, continuation, recipes and tool_steps.usage summaries")
                 return errors
             edition = generate_edition(work, draft, packet, backend, detailed_validator, model=model,
-                                       feedback=feedback, max_repairs=4, language=language, max_structural_repairs=4)
+                                       feedback=feedback, max_repairs=4, language=language, max_structural_repairs=4, transfer_probe=True)
             article, insights = edition["article"], edition["insights"]
             staged = work / "edition-render"
             staged.mkdir(exist_ok=True)
@@ -196,6 +197,10 @@ def validate_story(directory):
             errors.extend(validate_edition(edition, packet, validate_article))
             feedback_path = support / "editorial-feedback.json"
             feedback = validate_feedback(json.loads(feedback_path.read_bytes()), packet, report["source_sha256"]) if feedback_path.is_file() else []
+            try:
+                feedback = effective_feedback(receipt, feedback, packet)
+            except ValueError as error:
+                errors.append(str(error))
             errors.extend(validate_review(receipt.get("review"), feedback, protocol=receipt.get("review_protocol")))
             if receipt.get("status") != "completed" or receipt.get("review", {}).get("issues") or receipt.get("output_sha256") != file_hash(edition_path):
                 errors.append("Whole-document review does not match the accepted edition")

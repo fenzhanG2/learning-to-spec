@@ -95,12 +95,13 @@ def main(argv=None):
             if arguments.max_calls < 0:
                 raise ValueError("--max-calls cannot be negative; zero allows only matching cached stages")
             if arguments.dry_run:
-                result = {"stages": ["source snapshot", "canonical work model", "source language", "joint human story and detailed Agent working record", "whole-document review and bounded repairs", "complete tool ledger and HTML/Markdown render"],
-                          "max_calls": arguments.max_calls, "additional_story_calls_minimum": 2, "additional_story_calls_with_repairs_maximum": 30,
+                result = {"stages": ["source snapshot", "canonical work model", "source language", "joint human story and detailed Agent working record", "fresh delivered-pair transfer probe", "whole-document review and bounded repairs", "complete tool ledger and HTML/Markdown render"],
+                          "max_calls": arguments.max_calls, "additional_story_calls_minimum": 2 if arguments.revise_from else 3,
+                          "additional_story_calls_with_repairs_maximum": arguments.max_calls, "matching_cache_calls_minimum": 0,
                           "language": arguments.language, "format_retry_policy": "At most one additional call per invalid JSON response, within the total budget",
                           "editorial_feedback": bool(arguments.editorial_feedback),
                           "reference_project_dependencies": [], "historical_commands_executed": False,
-                          "note": "Canonical extraction has separate chunk-dependent calls within the same total budget. Full story packet limit: 800,000 characters."}
+                          "note": "The minimum assumes an uncached valid draft and no corrections (revision omits drafting); a matching cache can use zero calls. The maximum is the shared --max-calls budget, not an extra story allowance; canonical extraction and all JSON/citation retries consume it too. A budget below the uncached minimum requires matching cached stages. Full story packet limit: 800,000 characters; transfer-probe pair limit: 240,000 characters."}
             else:
                 defaults = local_defaults()
                 result = run_story(arguments.session, arguments.home, arguments.out, from_export=arguments.from_export,
