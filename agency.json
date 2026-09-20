@@ -1,0 +1,6 @@
+{
+  "engines": ["copilot"],
+  "category": "developer-tools",
+  "authors": [{"name": "Feng Zhang", "email": "fenzhan@microsoft.com"}],
+  "governance": {"layer": 4, "certification": "draft"}
+}

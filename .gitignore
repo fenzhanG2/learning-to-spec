@@ -1,0 +1,6 @@
+__pycache__/
+*.pyc
+.venv/
+exports/
+private-tests/
+node_modules/

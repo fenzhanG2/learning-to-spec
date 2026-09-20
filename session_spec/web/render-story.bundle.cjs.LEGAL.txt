@@ -1,0 +1,12 @@
+Bundled license information:
+
+@dagrejs/dagre/dist/dagre.cjs:
+  /*! For license information please see dagre.cjs.LEGAL.txt */
+
+lucide/dist/cjs/lucide.js:
+  /**
+   * @license lucide v1.8.0 - ISC
+   *
+   * This source code is licensed under the ISC license.
+   * See the LICENSE file in the root directory of this source tree.
+   */

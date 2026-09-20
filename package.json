@@ -1,0 +1,16 @@
+{
+  "name": "learning-to-spec-renderer",
+  "private": true,
+  "version": "0.5.3",
+  "scripts": {
+    "build": "node scripts/build_renderer.cjs"
+  },
+  "devDependencies": {
+    "esbuild": "0.28.2"
+  },
+  "dependencies": {
+    "@dagrejs/dagre": "3.1.1",
+    "lucide": "1.8.0",
+    "markdown-it": "14.3.2"
+  }
+}

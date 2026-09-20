@@ -1,0 +1,17 @@
+{
+  "schema": "renderer-bundle/v1",
+  "sources": {
+    "package-lock.json": "9a5beb6bffe04d4679587d0d9f2666171128791665fad93fce5fceaa681d32b5",
+    "session_spec/web/agent-preview.cjs": "f213e5353fbe671a4ed9b234ddc853c2d1d4ba9dd853ad284f1807d3211d8ccd",
+    "session_spec/web/evidence-preview.cjs": "556c85715fdbab332cb92ee852e08b1ee33448fc61799ef3ad7441218bb37ffc",
+    "session_spec/web/locale.cjs": "3978a61c69be51d73da3db400792672154cd084b9cafc752761345a3cbac5a97",
+    "session_spec/web/render-story.cjs": "8f90f22a6dcf1a4ade664cf8b9bdb81e35e10ae9f00072ee69ef5914a5ad932e",
+    "session_spec/web/story-diagram.cjs": "71f6931005354a94097ffbc533219923d6563d0cd0592fa1f652b5fd28db7e48",
+    "session_spec/web/story-page.cjs": "9e846f519241f26554fe40126ab0c6cdf94ebd2a1cd3354adea6489d294a228d",
+    "third_party/rendering-dependencies.txt": "081440de020b3abf43d09b2e65fe128f7b4bd4c27298747d17258149983dbb0a"
+  },
+  "outputs": {
+    "render-story.bundle.cjs": "a943d967b7c5d4dfd1743d285819fd84ca514d577a3b069ecc66f3b6d8a04b8c",
+    "render-story.bundle.cjs.LEGAL.txt": "386e01c0595f567479d56b4b9f2ffd69c49eace601820c422e7b7a72bfb9aadf"
+  }
+}

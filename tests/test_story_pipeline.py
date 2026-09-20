@@ -1,0 +1,746 @@
+import copy
+import contextlib
+import hashlib
+import io
+import json
+import shutil
+import subprocess
+import tempfile
+import unittest
+from pathlib import Path
+from unittest.mock import patch
+
+from session_spec.pipeline import write_json
+from session_spec.cli import main as cli_main
+from session_spec.story_context import file_activity, root_packet, select_story_windows, tool_exchanges
+from session_spec.story_brief import PROMPTS, generate_brief, validate_brief
+from session_spec.story_editor import CHECKS, compact_evidence, generate_edition, validate_edition, validate_feedback, validate_review
+from session_spec.story_insights import generate_insights, validate_insights
+from session_spec.story_grounding import complete_reference_pairs, resolve_review_locations, validate_grounding
+from session_spec.story_pipeline import reviewed_article, run_story, validate_article, validate_story
+from session_spec.agent_handoff import render_agent
+
+
+def packet():
+    return [
+        {"ref": "E000001", "origin": "root", "type": "user.message", "turn": 1, "text": "保留功能，只隐藏窗口。", "human_input": "保留功能，只隐藏窗口。"},
+        {"ref": "E000002", "origin": "root", "type": "tool.execution_complete", "turn": 1, "tool": "shell", "result": {"content": "Readback: task calls wrapper; startup signal observed."}, "success": True},
+    ]
+
+
+def article(schema="agent-detail/v3"):
+    value = {
+        "title": "窗口消失以后", "subtitle": "留下入口与边界", "period": "2026-01-01",
+        "opening": "用户希望窗口不再出现，但原来的功能要保留。", "outcome": "启动入口已改变；没有做重启测试。",
+        "route": [{"title": "调整入口", "detail": "保留原有功能"}],
+        "chapters": [{"id": "mechanism", "title": "保留运行关系", "markdown": "任务调用包装器。", "refs": ["E000001", "E000002"], "details": []}],
+        "checks": [{"question": "能启动吗", "observed": "看到启动信号", "limit": "不证明完整功能", "refs": ["E000002"]}],
+        "reader_coverage": [{"question": "如何工作", "chapters": ["mechanism"], "refs": ["E000002"]}],
+        "human_input_coverage": [{"ref": "E000001", "treatment": "mechanism 保留功能"}],
+        "agent_markdown": "# 交接\n\n入口已改变。需要重启时先确认授权。来源 E000001、E000002；证据在 _support/evidence.jsonl。\n",
+        "agent_detail": {"schema": schema,
+            "resume": {"checkpoint": "入口已改变，重启行为未验收。", "workspace": "记录只包含任务与包装器，当前状态需读回。", "next_action": "若继续验证，先读回任务入口。", "verification_boundary": "启动信号不是长期功能验收。", "refs": ["E000001", "E000002"]},
+            "continuation": [{"title": "复核入口", "basis": "proposed", "trigger": "用户希望继续验证。", "steps": [{"kind": "inspect", "action": "读回任务入口与包装器。", "precondition": "能访问当前配置。", "expected": "仍调用包装器，再决定验证方式。", "otherwise": "先解释配置差异，不盲目重启。", "refs": ["E000002"]}], "done_when": "实际启动场景符合保留功能的要求。", "stop_when": "缺少验证权限或配置与记录不符。", "refs": ["E000001", "E000002"]}],
+            "recipes": [{"title": "区分入口与功能", "basis": "proposed", "when": "需要隐藏启动窗口但保留原功能。", "adapt": "替换任务名称并核对调用链。", "procedure": ["确认入口、包装器和被调用功能。", "按真实启动场景验证功能而非只看进程。"], "avoid": "不能把启动信号当完整功能验收。", "verify": "在适用启动场景验证功能。", "refs": ["E000001", "E000002"]}],
+            "trajectory": [{"id": "entry-change", "title": "调整入口",
+            "tool_steps": [{"purpose": "确认入口。", "tool_refs": ["E000002"], "finding": "读回入口与启动信号。", "decision": "完整功能仍未验收。", "refs": ["E000002"]}],
+            "human_refs": ["E000001"], "summary": "保留功能，改变入口。", "rationale": {"basis": "not_recorded", "text": "没有记录选择包装器的理由。", "refs": []},
+            "tool_refs": ["E000002"], "observation": "读回入口和启动信号。", "outcome": "partial", "next_state": "重启行为未测试。", "refs": ["E000001", "E000002"]}],
+            "paths": [{"title": "隐藏启动", "outcome": "partial", "phase_ids": ["entry-change"], "reason": "启动信号不是完整功能验收。", "reuse_condition": "需要重启时先确认授权。", "refs": ["E000002"]}]},
+    }
+    if schema == "agent-detail/v3":
+        value["agent_detail"]["trajectory"][0]["tool_steps"][0]["usage"] = [{"tool": "shell", "action": "Read back the wrapper entry and startup signal.", "refs": ["E000002"]}]
+    return value
+
+
+def insights(include=True):
+    architecture = {"decision": "omit", "reason": "只有需求，还没有实际实现信息。"}
+    if include:
+        architecture = {
+            "decision": "include", "reason": "有读回结果", "kind": "final_artifact", "after_chapter": "mechanism",
+            "title": "实际启动链", "scope": "会话最后的入口，不是未来设计。",
+            "nodes": [{"id": "task", "title": "任务", "role": "控制", "detail": "管理入口", "refs": ["E000002"]},
+                      {"id": "wrapper", "title": "包装器", "role": "处理", "detail": "隐藏启动", "refs": ["E000002"]}],
+            "edges": [{"from": "task", "to": "wrapper", "label": "调用", "kind": "flow", "basis": "implementation", "refs": ["E000002"]}],
+            "evidence_summary": "配置读回支持这条调用关系。", "limits": "没有做重启测试。",
+        }
+    return {"schema": "story-insights/v1", "architecture": architecture, "closing": {
+        "title": "安静不等于停止", "paragraphs": ["这次保留了功能，只改变入口。", "有明确调用链时才适用这个判断，不等于长期行为已经验收。"],
+        "anchors": [{"chapter": "mechanism", "turning_point": "用户要求保留功能", "refs": ["E000001"]}],
+        "principle": "拆开入口与功能", "applicability": "有调用链证据", "non_claim": "不代表通过长期测试",
+    }}
+
+
+def brief():
+    return {
+        "schema": "story-brief/v1",
+        "background": {"text": "原有任务仍需要运行。", "refs": ["E000001"]},
+        "problem": {"text": "用户不想看到窗口。", "refs": ["E000001"]},
+        "goals": [{"text": "隐藏窗口而不损失原功能。", "refs": ["E000001"]}],
+        "approach": {"text": "在启动入口加一层包装。", "refs": ["E000002"]},
+        "non_goals": [],
+        "scope": [{"text": "这次修改启动入口。", "refs": ["E000002"]}],
+        "constraints": [{"kind": "requirement", "text": "保留原有功能。", "refs": ["E000001"]}],
+        "status": {"text": "启动信号已观察到，不代表完整功能已经验证。", "refs": ["E000002"]},
+    }
+
+
+def edition_review(issues=None):
+    findings = copy.deepcopy(issues or [])
+    for issue in findings:
+        issue.setdefault("path", "/article/agent_markdown")
+        issue.setdefault("quote", "交接")
+        issue.setdefault("severity", "major")
+        issue.setdefault("kind", "source_fact")
+        issue.setdefault("evidence", [{"ref": "E000001", "quote": "保留功能", "origin": "human"}])
+    return {"issues": findings, "suggestions": [], "checked": [{"category": category, "note": "Checked the document and its source."} for category in CHECKS], "summary": "Reviewed"}
+
+
+class FakeBackend:
+    def __init__(self, responses):
+        self.responses = list(responses)
+        self.calls = []
+        self.prompts = []
+
+    def generate(self, prompt, label):
+        self.calls.append({"label": label, "tool_calls": 0})
+        self.prompts.append(prompt)
+        response = self.responses.pop(0)
+        if isinstance(response, Exception):
+            raise response
+        return copy.deepcopy(response)
+
+
+class StorySchemaTests(unittest.TestCase):
+    def test_quote_locations_recover_unique_matches_without_changing_roles(self):
+        draft = {"article": article(), "insights": insights(), "brief": brief()}
+        review = edition_review([{"path": "/article/title", "quote": "入口已改变。", "evidence": [{"ref": "E000099", "origin": "human", "quote": "保留功能"}]}])
+        resolved, changes = resolve_review_locations(review, draft, packet())
+        self.assertEqual(resolved["issues"][0]["path"], "/article/agent_markdown")
+        self.assertEqual(resolved["issues"][0]["evidence"][0]["ref"], "E000001")
+        self.assertEqual(len(changes), 2)
+        self.assertEqual(validate_grounding(resolved, draft, packet(), ""), [])
+        evidence = packet() + [{"ref": "E000003", "type": "assistant.message", "text": "Restore or save?"}]
+        review["issues"][0]["evidence"] = [{"ref": "E000003", "origin": "human", "quote": "Restore or save?"}]
+        resolved, _ = resolve_review_locations(review, draft, evidence)
+        self.assertTrue(validate_grounding(resolved, draft, evidence, ""))
+
+    def test_quote_relocation_rejects_ambiguous_matches(self):
+        draft = {"article": article(), "insights": insights(), "brief": brief()}
+        evidence = packet() + [{"ref": "E000003", "type": "user.message", "human_input": "保留功能"}]
+        review = edition_review([{"evidence": [{"ref": "E000099", "origin": "human", "quote": "保留功能"}]}])
+        resolved, changes = resolve_review_locations(review, draft, evidence)
+        self.assertEqual(changes, [])
+        self.assertTrue(validate_grounding(resolved, draft, evidence, ""))
+
+    def test_read_display_prefix_matching_does_not_collapse_code_whitespace(self):
+        draft = {"article": article(), "insights": insights(), "brief": brief()}
+        evidence = packet() + [{"ref": "E000003", "type": "tool.execution_complete", "tool": "Read",
+                                "result": {"content": '  41→const value = "two  spaces"\n  42→return value'}}]
+        review = edition_review([{"evidence": [{"ref": "E000003", "origin": "tool", "quote": 'const value = "two  spaces"\nreturn value'}]}])
+        self.assertEqual(validate_grounding(review, draft, evidence, ""), [])
+        review["issues"][0]["evidence"][0]["quote"] = 'const value = "two spaces"\nreturn value'
+        self.assertTrue(validate_grounding(review, draft, evidence, ""))
+
+    def test_agent_cannot_offer_refs_without_providing_any(self):
+        candidate = article()
+        candidate["agent_markdown"] = "# Handoff\nConsult refs in the supporting evidence."
+        self.assertTrue(validate_article(candidate, packet()))
+
+    def test_assistant_options_cannot_ground_a_claim_of_human_choice(self):
+        draft = {"article": article(), "insights": insights(), "brief": brief()}
+        evidence = packet() + [{"ref": "E000003", "type": "assistant.message", "text": "Choose restore or auto-save?"}]
+        review = edition_review([{"kind": "human_requirement", "evidence": [{"ref": "E000003", "origin": "human", "quote": "Choose restore"}]}])
+        self.assertTrue(validate_grounding(review, draft, evidence, ""))
+        review["issues"][0]["evidence"] = [{"ref": "E000001", "origin": "human", "quote": "保留功能"}]
+        self.assertEqual(validate_grounding(review, draft, evidence, ""), [])
+
+    def test_review_needs_real_manuscript_text_and_contract_not_invented_rules(self):
+        draft = {"article": article(), "insights": insights(), "brief": brief()}
+        review = edition_review([{"kind": "contract", "contract_quote": "An invented publishing rule", "evidence": []}])
+        self.assertTrue(validate_grounding(review, draft, packet(), "Real publishing rule"))
+        review["issues"][0]["contract_quote"] = "Real publishing rule"
+        self.assertEqual(validate_grounding(review, draft, packet(), "Real publishing rule"), [])
+        review["issues"][0]["quote"] = "This sentence does not exist"
+        self.assertTrue(validate_grounding(review, draft, packet(), "Real publishing rule"))
+
+    def test_ungrounded_criticism_retries_the_review_without_rewriting_the_draft(self):
+        draft = {"article": article(), "insights": insights(), "brief": brief()}
+        unsupported = edition_review([{"quote": "A sentence absent from the actual draft", "reason": "Unsupported criticism"}])
+        with tempfile.TemporaryDirectory() as temporary:
+            backend = FakeBackend([unsupported, edition_review()])
+            actual = generate_edition(Path(temporary), draft, packet(), backend, validate_article)
+            self.assertEqual(actual, draft)
+            self.assertEqual([call["label"] for call in backend.calls],
+                             ["story-edition-review", "story-edition-review-grounding-retry"])
+        with tempfile.TemporaryDirectory() as temporary:
+            backend = FakeBackend([unsupported, unsupported])
+            with self.assertRaises(ValueError):
+                generate_edition(Path(temporary), draft, packet(), backend, validate_article)
+            self.assertFalse((Path(temporary) / "edition.json").exists())
+            self.assertEqual(len(backend.calls), 2)
+
+    def test_reference_completion_preserves_failure_and_does_not_cross_calls(self):
+        events = [{"ref": "E000001", "type": "tool.execution_start", "tool_call_id": "call-1"},
+                  {"ref": "E000002", "type": "tool.execution_complete", "tool_call_id": "call-1", "success": False},
+                  {"ref": "E000003", "type": "tool.execution_complete", "tool_call_id": "call-2"}]
+        original = {"refs": ["E000001"]}
+        completed, changes = complete_reference_pairs(original, events)
+        self.assertEqual(completed["refs"], ["E000001", "E000002"])
+        self.assertEqual(original["refs"], ["E000001"])
+        self.assertEqual(changes[0]["added"], ["E000002"])
+        self.assertFalse(events[1]["success"])
+        events.append({"ref": "E000004", "type": "tool.execution_start", "tool_call_id": "call-1"})
+        self.assertEqual(complete_reference_pairs(original, events)[0], original)
+
+    def test_coverage_cannot_add_assistant_options_as_user_inputs(self):
+        candidate = article()
+        candidate["human_input_coverage"].append({"ref": "E000002", "treatment": "User chose the tool result"})
+        self.assertTrue(validate_article(candidate, packet()))
+
+    def test_minor_suggestions_do_not_masquerade_as_fact_failures(self):
+        draft = {"article": article(), "insights": insights(), "brief": brief()}
+        review = edition_review()
+        review["suggestions"] = [{"path": "/article", "reason": "Could be more concise"}]
+        self.assertEqual(validate_grounding(review, draft, packet(), ""), [])
+        review = edition_review([{"severity": "minor", "reason": "Could be more concise"}])
+        self.assertTrue(validate_grounding(review, draft, packet(), ""))
+
+    def test_imported_skill_help_is_not_promoted_to_human_authority(self):
+        records = [
+            {"ref": "E000001", "origin": "root", "type": "tool.execution_complete", "tool": "Skill", "timestamp": "2026-01-01T00:00:00.100+00:00", "result": {"content": "Launching skill: docs:help"}},
+            {"ref": "E000002", "origin": "root", "type": "user.message", "timestamp": "2026-01-01T00:00:00.099+00:00", "text": "# Help\n" + "Historical documentation. " * 8, "import_metadata": {"role": "user"}},
+            {"ref": "E000003", "origin": "root", "type": "user.message", "timestamp": "2026-01-01T00:01:00+00:00", "text": "Please implement the requested fix.", "import_metadata": {"role": "user"}},
+        ]
+        result = root_packet(records)
+        self.assertNotIn("human_input", result[1])
+        self.assertIn("Historical documentation", result[1]["text"])
+        self.assertEqual(result[1]["source_context"]["basis_refs"], ["E000001"])
+        self.assertEqual(result[2]["human_input"], records[2]["text"])
+        records[1]["timestamp"] = "2026-01-01T00:05:00+00:00"
+        self.assertIn("human_input", root_packet(records)[1])
+
+    def test_tool_exchange_index_preserves_pairs_without_inventing_success(self):
+        records = [{"ref": "E000001", "origin": "root", "type": "tool.execution_start", "tool": "Bash", "tool_call_id": "pending", "text": ""},
+                   {"ref": "E000002", "origin": "root", "type": "tool.execution_complete", "tool": "Bash", "tool_call_id": "separate", "text": ""}]
+        result = root_packet(records)
+        index = tool_exchanges(result)["by_call_id"]
+        self.assertEqual(index["pending"]["results"], [])
+        self.assertEqual(index["separate"]["requests"], [])
+        self.assertNotIn("success", result[1])
+
+    def test_include_and_omit(self):
+        self.assertEqual(validate_insights(insights(), article(), packet()), [])
+        self.assertEqual(validate_insights(insights(False), article(), packet()), [])
+        self.assertEqual(validate_article(article(), packet()), [])
+
+    def test_rejects_placeholder_graph_on_omit(self):
+        candidate = insights(False)
+        candidate["architecture"]["nodes"] = []
+        self.assertTrue(validate_insights(candidate, article(), packet()))
+
+    def test_bad_edges_references_and_claims_fail(self):
+        for key, value in (("to", "missing"), ("basis", "proposed"), ("refs", ["E000999"]), ("refs", ["E000001"])):
+            with self.subTest(key=key, value=value):
+                candidate = insights()
+                candidate["architecture"]["edges"][0][key] = value
+                self.assertTrue(validate_insights(candidate, article(), packet()))
+
+    def test_orphan_node_and_ungrounded_closing_fail(self):
+        candidate = insights()
+        candidate["architecture"]["nodes"].append({"id": "unused", "title": "猜测", "role": "处理", "detail": "不存在的关系", "refs": ["E000002"]})
+        candidate["closing"]["anchors"] = []
+        self.assertGreaterEqual(len(validate_insights(candidate, article(), packet())), 2)
+
+    def test_malformed_enums_do_not_crash(self):
+        candidate = insights()
+        candidate["architecture"]["kind"] = []
+        candidate["architecture"]["nodes"][0]["role"] = {}
+        candidate["architecture"]["edges"][0]["kind"] = []
+        self.assertTrue(validate_insights(candidate, article(), packet()))
+
+    def test_disconnected_real_chains_are_allowed(self):
+        candidate = insights()
+        second = copy.deepcopy(candidate["architecture"]["nodes"])
+        for node in second:
+            node["id"] += "-second"
+        candidate["architecture"]["nodes"].extend(second)
+        edge = copy.deepcopy(candidate["architecture"]["edges"][0])
+        edge.update({"from": "task-second", "to": "wrapper-second"})
+        candidate["architecture"]["edges"].append(edge)
+        self.assertEqual(validate_insights(candidate, article(), packet()), [])
+
+    def test_citations_and_user_coverage_not_exposed_or_lost(self):
+        candidate = article()
+        candidate["chapters"][0]["markdown"] += " E000002"
+        candidate["human_input_coverage"] = [{"ref": "E000002", "treatment": "wrong"}]
+        self.assertGreaterEqual(len(validate_article(candidate, packet())), 2)
+
+    def test_malformed_reference_arrays_are_rejected(self):
+        for references in (["not-an-evidence-id"], "E000002", [None], [{}]):
+            candidate = article()
+            candidate["chapters"][0]["refs"] = references
+            self.assertTrue(validate_article(candidate, packet()))
+
+    def test_ported_file_ledger_tracks_requests_not_success(self):
+        events = [{"type": "tool.execution_start", "tool": tool, "arguments": {"path": filename}, "ref": "E000001"}
+                  for tool, filename in (("read", "alpha"), ("write", "alpha"), ("read", "beta"), ("edit", "gamma"))]
+        ledger = file_activity(events)
+        self.assertEqual(ledger["read_only_requests"], ["beta"])
+        self.assertEqual(ledger["write_or_edit_requests"], ["alpha", "gamma"])
+        self.assertIn("not proof", ledger["limit"])
+
+    def test_file_ledger_accepts_case_variants_without_claiming_completion(self):
+        events = [{"type": "tool.execution_start", "tool": "Read", "arguments": {"file_path": "alpha.py"}, "ref": "E000001"},
+                  {"type": "tool.execution_start", "tool": "Edit", "arguments": {"file_path": "alpha.py"}, "ref": "E000002"}]
+        ledger = file_activity(events)
+        self.assertEqual(ledger["read_only_requests"], [])
+        self.assertEqual(ledger["write_or_edit_requests"], ["alpha.py"])
+        self.assertEqual(ledger["refs_by_path"]["alpha.py"], ["E000001", "E000002"])
+
+    def test_ported_windows_budget_preserves_chronology(self):
+        chunks = [{"turn": turn, "insight_score": score, "messages": [{"ref": "E000001", "text": text}]}
+                  for turn, score, text in ((3, 9, "x" * 20), (2, 5, "short"), (1, 1, "first"))]
+        self.assertEqual([window["turn"] for window in select_story_windows(chunks, 10)], [1, 2])
+
+    def test_insights_cache_is_bound_to_inputs(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            write_json(directory / "article.json", article())
+            write_json(directory / "input.json", packet())
+            backend = FakeBackend([insights(False), {"issues": []}])
+            generate_insights(directory, backend=backend)
+            generate_insights(directory, backend=backend)
+            self.assertEqual(len(backend.calls), 2)
+            changed = article()
+            changed["title"] = "另一个问题"
+            write_json(directory / "article.json", changed)
+            another = FakeBackend([{"issues": []}])
+            generate_insights(directory, backend=another)
+            self.assertEqual(len(another.calls), 1)
+            changed_events = packet()
+            changed_events[0]["text"] = "不同的源材料"
+            write_json(directory / "input.json", changed_events)
+            fresh = FakeBackend([insights(False), {"issues": []}])
+            generate_insights(directory, backend=fresh)
+            self.assertEqual(len(fresh.calls), 2)
+
+    def test_failed_review_publishes_no_insights(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            write_json(directory / "article.json", article())
+            write_json(directory / "input.json", packet())
+            backend = FakeBackend([insights(), {"issues": [{"reason": "not supported"}]}])
+            with self.assertRaises(ValueError):
+                generate_insights(directory, backend=backend, max_repairs=0)
+            self.assertFalse((directory / "insights.json").exists())
+
+    def test_insights_repairs_only_the_bad_field(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            write_json(directory / "article.json", article())
+            write_json(directory / "input.json", packet())
+            invalid = insights()
+            invalid["architecture"]["edges"][0]["basis"] = "proposed"
+            backend = FakeBackend([invalid, {"patches": [{"op": "replace", "path": "/architecture/edges/0/basis", "value": "implementation"}]}, {"issues": []}])
+            actual = generate_insights(directory, backend=backend)
+            self.assertEqual(actual, insights())
+            self.assertEqual(len(backend.calls), 3)
+
+    def test_writer_resumes_latest_draft_without_rewriting_good_fields(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            draft = article()
+            draft["title"] = "最新的未发布稿"
+            write_json(directory / "article-candidate-2.json", draft)
+            backend = FakeBackend([{"issues": [{"reason": "Fix only the title"}]}, {"patches": [{"op": "replace", "path": "/title", "value": "修正后的标题"}]}, {"issues": []}])
+            actual = reviewed_article(directory, packet(), None, backend, None)
+            self.assertEqual(actual["title"], "修正后的标题")
+            self.assertEqual(actual["chapters"], draft["chapters"])
+            self.assertEqual(actual["agent_markdown"], draft["agent_markdown"])
+            self.assertEqual(len(backend.calls), 3)
+
+    def test_previously_rejected_draft_cannot_pass_unchanged_on_resume(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            draft = article()
+            write_json(directory / "article-candidate-2.json", draft)
+            write_json(directory / "article-review-2.json", {"issues": [{"reason": "The title has an unsupported claim"}]})
+            backend = FakeBackend([{"patches": [{"op": "replace", "path": "/title", "value": "有依据的新标题"}]}, {"issues": []}])
+            actual = reviewed_article(directory, packet(), None, backend, None)
+            self.assertEqual(actual["title"], "有依据的新标题")
+            self.assertEqual(backend.calls[0]["label"], "human-story-patch")
+            self.assertEqual(len(backend.calls), 2)
+
+
+class StoryBriefTests(unittest.TestCase):
+    def test_explicit_exclusions_require_human_quote(self):
+        self.assertEqual(validate_brief(brief(), packet()), [])
+        events = packet()
+        events[0]["human_input"] = "不卸载软件，只隐藏窗口。"
+        candidate = brief()
+        candidate["non_goals"] = [{"text": "不卸载现有软件。", "quote": "不卸载软件", "refs": ["E000001"]}]
+        self.assertEqual(validate_brief(candidate, events), [])
+        for replacement in ({"quote": "未经记录的排除"}, {"refs": ["E000002"]}, {"refs": []}):
+            changed = copy.deepcopy(candidate)
+            changed["non_goals"][0].update(replacement)
+            self.assertTrue(validate_brief(changed, events))
+
+    def test_intent_requires_human_source_and_prose_has_no_internal_ids(self):
+        for field in ("goals", "constraints"):
+            candidate = brief()
+            candidate[field][0]["refs"] = ["E000002"]
+            self.assertTrue(validate_brief(candidate, packet()))
+        for replacement in ({"text": "参见 E000001"}, {"text": "<script>alert(1)</script>"}, {"refs": [{}]}, {"refs": ["E000999"]}):
+            candidate = brief()
+            candidate["problem"].update(replacement)
+            self.assertTrue(validate_brief(candidate, packet()))
+
+    def test_missing_and_malformed_fields_are_not_published(self):
+        for field, replacement in (("schema", "wrong"), ("problem", None), ("goals", []), ("non_goals", "unknown"), ("constraints", [{}]), ("scope", [None])):
+            candidate = brief()
+            candidate[field] = replacement
+            self.assertTrue(validate_brief(candidate, packet()))
+
+    def test_cache_tracks_source_article_model_and_prompt_without_changing_article(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            write_json(directory / "article.json", article())
+            write_json(directory / "input.json", packet())
+            original = (directory / "article.json").read_bytes()
+            backend = FakeBackend([brief(), {"issues": []}])
+            generate_brief(directory, backend)
+            generate_brief(directory, backend)
+            self.assertEqual(len(backend.calls), 2)
+            self.assertEqual((directory / "article.json").read_bytes(), original)
+            changed = article()
+            changed["title"] = "新的文章标题"
+            write_json(directory / "article.json", changed)
+            backend = FakeBackend([brief(), {"issues": []}])
+            generate_brief(directory, backend)
+            self.assertEqual(len(backend.calls), 2)
+            events = packet()
+            events[1]["result"] = {"content": "Different readback"}
+            write_json(directory / "input.json", events)
+            backend = FakeBackend([brief(), {"issues": []}])
+            generate_brief(directory, backend)
+            self.assertEqual(len(backend.calls), 2)
+            backend = FakeBackend([{"issues": []}])
+            generate_brief(directory, backend, model="different")
+            self.assertEqual(len(backend.calls), 1)
+            templates = directory / "templates"
+            templates.mkdir()
+            for name in ("story-brief.md", "story-brief-review.md"):
+                shutil.copy2(PROMPTS / name, templates / name)
+            with (templates / "story-brief.md").open("a", encoding="utf-8") as stream:
+                stream.write("\nRevised writing contract\n")
+            backend = FakeBackend([{"issues": []}])
+            with patch("session_spec.story_brief.PROMPTS", templates):
+                generate_brief(directory, backend, model="different")
+            self.assertEqual(len(backend.calls), 1)
+
+    def test_failed_candidate_cannot_pass_unchanged_after_resume(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            write_json(directory / "article.json", article())
+            write_json(directory / "input.json", packet())
+            backend = FakeBackend([brief(), {"issues": [{"reason": "Clarify the observation limit"}]}])
+            with self.assertRaises(ValueError):
+                generate_brief(directory, backend, max_repairs=0)
+            self.assertFalse((directory / "brief.json").exists())
+            backend = FakeBackend([{"patches": [{"op": "replace", "path": "/status/text", "value": "只看到启动信号。"}]}, {"issues": []}])
+            result = generate_brief(directory, backend)
+            self.assertEqual(backend.calls[0]["label"], "story-brief-patch")
+            self.assertEqual(result["status"]["text"], "只看到启动信号。")
+            self.assertEqual(result["background"], brief()["background"])
+            self.assertEqual(json.loads((directory / "article.json").read_bytes()), article())
+
+    def test_invalid_review_or_out_of_scope_patch_keeps_accepted_brief(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            write_json(directory / "article.json", article())
+            write_json(directory / "input.json", packet())
+            generate_brief(directory, FakeBackend([brief(), {"issues": []}]))
+            accepted = (directory / "brief.json").read_bytes()
+            backend = FakeBackend([{"issues": "malformed"}])
+            with self.assertRaises(ValueError):
+                generate_brief(directory, backend, model="different")
+            self.assertEqual((directory / "brief.json").read_bytes(), accepted)
+            backend = FakeBackend([{"issues": [{"reason": "Change status"}]}, {"patches": [{"op": "replace", "path": "/agent_markdown", "value": "not allowed"}]}])
+            with self.assertRaises(ValueError):
+                generate_brief(directory, backend, model="different", max_repairs=1)
+            self.assertEqual((directory / "brief.json").read_bytes(), accepted)
+
+
+class StoryEditorTests(unittest.TestCase):
+    def test_feedback_is_source_bound_and_each_finding_needs_resolution(self):
+        feedback = {"source_sha256": "source-hash", "issues": [{"reason": "A contradictory claim", "refs": ["E000001"]}]}
+        self.assertEqual(validate_feedback(feedback, packet(), "source-hash"), feedback["issues"])
+        with self.assertRaises(ValueError):
+            validate_feedback(feedback, packet(), "different-session")
+        wrong = copy.deepcopy(feedback)
+        wrong["issues"][0]["refs"] = ["E000999"]
+        with self.assertRaises(ValueError):
+            validate_feedback(wrong, packet(), "source-hash")
+        review = edition_review()
+        self.assertTrue(validate_review(review, feedback["issues"]))
+        review["feedback_resolution"] = [{"index": 0, "status": "needs_fix", "note": "Still present"}]
+        self.assertTrue(validate_review(review, feedback["issues"]))
+        review["feedback_resolution"][0].update(status="fixed", note="Replaced with the observed state")
+        self.assertEqual(validate_review(review, feedback["issues"]), [])
+
+    def test_new_reader_feedback_invalidates_an_earlier_empty_review(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            draft = {"article": article(), "insights": insights(), "brief": brief()}
+            generate_edition(directory, draft, packet(), FakeBackend([edition_review()]), validate_article)
+            finding = [{"reason": "Recheck this newly noticed issue", "refs": ["E000001"]}]
+            review = edition_review()
+            review["feedback_resolution"] = [{"index": 0, "status": "not_applicable", "note": "Current paragraph already preserves the boundary"}]
+            backend = FakeBackend([review])
+            generate_edition(directory, draft, packet(), backend, validate_article, feedback=finding)
+            self.assertEqual(len(backend.calls), 1)
+            self.assertIn("Recheck this newly noticed issue", backend.prompts[0])
+            self.assertIn("feedback_resolution", backend.prompts[0].splitlines()[-1])
+
+    def test_cli_dry_run_reports_whole_document_stage_and_allows_cache_only_budget(self):
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            result = cli_main(["story", "--from-export", "unused-source", "--out", "unused-output", "--dry-run", "--max-calls", "0"])
+        self.assertEqual(result, 0)
+        report = json.loads(output.getvalue())
+        self.assertEqual(report["additional_story_calls_minimum"], 2)
+        self.assertEqual(report["additional_story_calls_with_repairs_maximum"], 30)
+        self.assertEqual(report["language"], "auto")
+        self.assertTrue(any("whole-document" in stage for stage in report["stages"]))
+
+    def test_compaction_only_removes_identical_duplicate_result_text(self):
+        evidence = [{"result": {"content": "same", "detailedContent": "same"}}, {"result": {"content": "short", "detailedContent": "longer evidence"}}]
+        original = copy.deepcopy(evidence)
+        compact = compact_evidence(evidence)
+        self.assertNotIn("detailedContent", compact[0]["result"])
+        self.assertEqual(compact[1], evidence[1])
+        self.assertEqual(evidence, original)
+
+    def test_review_cannot_skip_reader_responsibilities(self):
+        self.assertEqual(validate_review(edition_review()), [])
+        self.assertTrue(validate_review({"issues": []}))
+        review = edition_review()
+        review["checked"].pop()
+        self.assertTrue(validate_review(review))
+
+    def test_edition_detects_length_route_and_handoff_order(self):
+        draft = {"article": article(), "insights": insights(), "brief": brief()}
+        self.assertEqual(validate_edition(draft, packet(), validate_article), [])
+        draft["article"]["route"] *= 6
+        draft["article"]["agent_markdown"] = "## 历史轨迹\n先介绍历史。E000001"
+        for field in ("background", "problem", "approach", "status"):
+            draft["brief"][field]["text"] = "很" * 300
+        draft["brief"]["goals"][0]["text"] = "目标" * 150
+        self.assertGreaterEqual(len(validate_edition(draft, packet(), validate_article)), 4)
+        draft["insights"]["architecture"]["after_chapter"] = "not-in-the-edited-article"
+        self.assertIn("Architecture chapter does not exist", validate_edition(draft, packet(), validate_article))
+
+    def test_editor_repairs_across_components_then_caches_without_mutating_drafts(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            draft = {"article": article(), "insights": insights(), "brief": brief()}
+            original = copy.deepcopy(draft)
+            backend = FakeBackend([edition_review([{"reason": "Clarify the title and closing together"}]),
+                                   {"patches": [{"op": "replace", "path": "/article/title", "value": "静默启动的边界"},
+                                                {"op": "replace", "path": "/insights/closing/title", "value": "保留职责，改变入口"}]}, edition_review()])
+            actual = generate_edition(directory, draft, packet(), backend, validate_article)
+            self.assertEqual(actual["article"]["title"], "静默启动的边界")
+            self.assertIn("STRUCTURAL_OUTPUT_CONTRACT", backend.prompts[1])
+            self.assertIn('"nodes"', backend.prompts[1])
+            self.assertEqual(actual["insights"]["closing"]["title"], "保留职责，改变入口")
+            self.assertEqual(draft, original)
+            cached = FakeBackend([])
+            self.assertEqual(generate_edition(directory, draft, packet(), cached, validate_article), actual)
+            self.assertEqual(cached.calls, [])
+            changed_contract = FakeBackend([edition_review()])
+            self.assertEqual(generate_edition(directory, draft, packet(), changed_contract, validate_article, model="different"), actual)
+
+    def test_oversized_brief_is_not_fixed_by_shortening_unused_opening(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            draft = {"article": article(), "insights": insights(), "brief": brief()}
+            for field in ("background", "problem", "approach", "status"):
+                draft["brief"][field]["text"] = "很" * 300
+            draft["brief"]["goals"][0]["text"] = "目标" * 150
+            errors = validate_edition(draft, packet(), validate_article)
+            self.assertTrue(any(issue.startswith("/brief:") for issue in errors))
+            backend = FakeBackend([{"patches": [
+                {"op": "replace", "path": "/article/opening", "value": "精简的备用导语。"}
+            ]}, edition_review()])
+            with self.assertRaises(ValueError):
+                generate_edition(directory, draft, packet(), backend, validate_article, max_repairs=1)
+            self.assertFalse((directory / "edition.json").exists())
+            resumed = FakeBackend([{"patches": [
+                {"op": "replace", "path": "/brief", "value": brief()}
+            ]}, edition_review()])
+            result = generate_edition(directory, draft, packet(), resumed, validate_article)
+            self.assertEqual(result["brief"], brief())
+            self.assertEqual(result["article"]["opening"], "精简的备用导语。")
+
+    def test_known_failed_edition_cannot_pass_unchanged_on_resume(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            draft = {"article": article(), "insights": insights(), "brief": brief()}
+            backend = FakeBackend([edition_review([{"reason": "Title and timing disagree"}])])
+            with self.assertRaises(ValueError):
+                generate_edition(directory, draft, packet(), backend, validate_article, max_repairs=0)
+            self.assertFalse((directory / "edition.json").exists())
+            resumed = FakeBackend([{"patches": [{"op": "replace", "path": "/article/title", "value": "无时间夸大的标题"}]}, edition_review()])
+            actual = generate_edition(directory, draft, packet(), resumed, validate_article)
+            self.assertEqual(actual["article"]["title"], "无时间夸大的标题")
+            self.assertEqual(resumed.calls[0]["label"], "story-edition-patch")
+
+    def test_out_of_scope_patch_cannot_replace_source_or_publish(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            draft = {"article": article(), "insights": insights(), "brief": brief()}
+            backend = FakeBackend([edition_review([{"reason": "Fix a claim"}]), {"patches": [{"op": "add", "path": "/source", "value": "forged"}]}])
+            with self.assertRaises(ValueError):
+                generate_edition(directory, draft, packet(), backend, validate_article, max_repairs=1)
+            self.assertFalse((directory / "edition.json").exists())
+
+
+@unittest.skipUnless(shutil.which("node"), "Node.js required for HTML rendering")
+class StoryPipelineTests(unittest.TestCase):
+    def test_brief_renders_exclusions_and_inline_code_without_private_refs(self):
+        renderer = Path(__file__).resolve().parents[1] / "session_spec/web/story-page.cjs"
+        candidate = brief()
+        candidate["non_goals"] = [{"text": "不移除已有功能。", "quote": "INTERNAL_QUOTE_ONLY", "refs": ["E000001"]}]
+        candidate["approach"]["text"] = "入口调用 `wrapper`，正文不执行 <script>。"
+        candidate["constraints"] = []
+        conclusion = insights()
+        conclusion["closing"]["paragraphs"] = ["保留 `wrapper` 的职责，不执行 <script>。"]
+        payload = json.dumps({"article": article(), "insights": conclusion, "brief": candidate}, ensure_ascii=False)
+        script = "const {renderArticle}=require(process.argv[1]); const data=JSON.parse(process.argv[2]); process.stdout.write(renderArticle(data.article,{category:'test'},'#','#','next',data.insights,data.brief));"
+        result = subprocess.run(["node", "-e", script, str(renderer), payload], capture_output=True, text=True, encoding="utf-8", check=True)
+        intro = result.stdout.split('id="story-brief"', 1)[1].split('</section>', 1)[0]
+        self.assertIn("明确不做 · Non-goals", intro)
+        self.assertIn("不移除已有功能。", intro)
+        self.assertIn("<code>wrapper</code>", intro)
+        self.assertIn("&lt;script&gt;", intro)
+        self.assertNotIn("<script>", intro)
+        self.assertNotIn("INTERNAL_QUOTE_ONLY", intro)
+        self.assertNotIn("E000001", intro)
+        self.assertNotIn("会话未明确约定不做事项", intro)
+        self.assertNotIn("限制与前提", intro)
+        ending = result.stdout.split('id="story-takeaway"', 1)[1].split('</section>', 1)[0]
+        self.assertIn("<code>wrapper</code>", ending)
+        self.assertIn("&lt;script&gt;", ending)
+        self.assertNotIn("<script>", ending)
+        self.assertNotIn("`wrapper`", ending)
+        candidate["non_goals"] = []
+        payload = json.dumps({"article": article(), "insights": insights(), "brief": candidate}, ensure_ascii=False)
+        result = subprocess.run(["node", "-e", script, str(renderer), payload], capture_output=True, text=True, encoding="utf-8", check=True)
+        intro = result.stdout.split('id="story-brief"', 1)[1].split('</section>', 1)[0]
+        self.assertNotIn("Non-goals", intro)
+        self.assertNotIn("brief-boundaries", intro)
+
+    def test_diagram_wrap_preserves_short_identifiers_and_punctuation(self):
+        renderer = Path(__file__).resolve().parents[1] / "session_spec/web/story-diagram.cjs"
+        result = subprocess.run(["node", "-e", "const {wrap,plainText}=require(process.argv[1]); console.log(JSON.stringify(wrap(plainText('负责启动 `KeepAwake.vbs` 并等待。'),18)));", str(renderer)], capture_output=True, text=True, encoding="utf-8", check=True)
+        lines = json.loads(result.stdout)
+        self.assertTrue(any("KeepAwake.vbs" in line for line in lines))
+        self.assertFalse(any(line.startswith("。") for line in lines))
+        self.assertNotIn("`", "".join(lines))
+
+    def test_full_pipeline_cache_tamper_and_failed_resume(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / "source/events.jsonl"
+            source.parent.mkdir()
+            source.write_bytes(b"historical session snapshot")
+            export = root / "base"
+            export.mkdir()
+            write_json(export / "source.json", {"source_path": str(source), "snapshot_bytes": source.stat().st_size,
+                                               "source_sha256": hashlib.sha256(source.read_bytes()).hexdigest()})
+            (export / "evidence.jsonl").write_text("\n".join(json.dumps(event) for event in packet()), encoding="utf-8")
+            write_json(export / "spec.json", {"spec": {"old_error": "STALE_CANONICAL_CLAIM"}})
+            output = root / "output"
+            draft = {"article": article(), "insights": insights(), "brief": brief()}
+            backend = FakeBackend([draft, edition_review()])
+            result = run_story(None, root / "copilot", output, from_export=export, backend_factory=lambda **options: backend)
+            self.assertEqual(result["model_calls"], 2)
+            for prompt in backend.prompts:
+                self.assertIn("SOURCE_LANGUAGE_POLICY", prompt)
+                self.assertNotIn("The output language is", prompt)
+            language_info = json.loads((output / "_support/language.json").read_bytes())
+            self.assertEqual(language_info["requested"], "auto")
+            self.assertEqual(language_info["language"], "zh-CN")
+            self.assertIn("STALE_CANONICAL_CLAIM", backend.prompts[0])
+            self.assertNotIn("STALE_CANONICAL_CLAIM", backend.prompts[1])
+            self.assertTrue(validate_story(output)["valid"])
+            html = (output / "human-spec.html").read_text(encoding="utf-8")
+            self.assertIn('class="arch-svg"', html)
+            self.assertIn('<code>agent-spec.md</code>', html)
+            self.assertIn('<code>evidence.md</code>', html)
+            self.assertNotIn('<dialog', html)
+            self.assertNotIn('id="agent-preview"', html)
+            self.assertIn('id="story-takeaway"', html)
+            self.assertLess(html.index('id="story-brief"'), html.index('aria-label="故事路线"'))
+            self.assertIn('href="#story-brief"', html)
+            self.assertNotIn('class="opening"', html)
+            intro = html.split('id="story-brief"', 1)[1].split('</section>', 1)[0]
+            self.assertNotIn("Non-goals", intro)
+            self.assertNotIn("会话未明确约定", intro)
+            self.assertIn('class="brief-grid brief-boundaries"><div style="grid-column:1/-1">', intro)
+            self.assertIn("限制与前提", intro)
+            self.assertEqual((output / "agent-spec.md").read_text(encoding="utf-8"), render_agent(article(), packet(), "zh-CN"))
+            self.assertNotIn("E000001", html.split('<dialog')[0])
+            cached = FakeBackend([])
+            run_story(None, root / "copilot", output, from_export=export, resume=True, backend_factory=lambda **options: cached)
+            self.assertEqual(cached.calls, [])
+            feedback_path = root / "feedback.json"
+            source_hash = hashlib.sha256(source.read_bytes()).hexdigest()
+            write_json(feedback_path, {"source_sha256": source_hash, "issues": [{"reason": "Recheck the observed limit", "refs": ["E000001"]}]})
+            feedback_review = edition_review()
+            feedback_review["feedback_resolution"] = [{"index": 0, "status": "not_applicable", "note": "Current statement already distinguishes observation and acceptance"}]
+            reviewed_feedback = FakeBackend([feedback_review])
+            run_story(None, root / "copilot", output, from_export=export, resume=True,
+                      editorial_feedback=feedback_path, backend_factory=lambda **options: reviewed_feedback)
+            self.assertEqual(len(reviewed_feedback.calls), 1)
+            self.assertTrue(validate_story(output)["valid"])
+            retained = FakeBackend([])
+            run_story(None, root / "copilot", output, from_export=export, resume=True, backend_factory=lambda **options: retained)
+            self.assertEqual(retained.calls, [])
+            self.assertEqual(json.loads((output / "_support/editorial-feedback.json").read_bytes())["issues"][0]["reason"], "Recheck the observed limit")
+            write_json(feedback_path, {"source_sha256": "wrong-source", "issues": []})
+            with self.assertRaises(ValueError):
+                run_story(None, root / "copilot", output, from_export=export, resume=True,
+                          editorial_feedback=feedback_path, backend_factory=lambda **options: retained)
+            self.assertTrue(validate_story(output)["valid"])
+            self.assertEqual((output / "human-spec.html").read_text(encoding="utf-8"), html)
+            changed_article = article()
+            changed_article["title"] = "A changed but accepted draft"
+            failing = FakeBackend([{**draft, "article": changed_article}, ValueError("joint review provider failed")])
+            with self.assertRaises(ValueError):
+                run_story(None, root / "copilot", output, from_export=export, resume=True, model="different", backend_factory=lambda **options: failing)
+            self.assertTrue(validate_story(output)["valid"])
+            self.assertEqual((output / "human-spec.html").read_text(encoding="utf-8"), html)
+            failing_brief = FakeBackend([{"issues": "malformed"}])
+            with self.assertRaises(ValueError):
+                run_story(None, root / "copilot", output, from_export=export, resume=True, model="different", backend_factory=lambda **options: failing_brief)
+            self.assertTrue(validate_story(output)["valid"])
+            self.assertEqual((output / "human-spec.html").read_text(encoding="utf-8"), html)
+            brief_path = output / "_support/brief.json"
+            accepted_brief = brief_path.read_bytes()
+            tampered = brief()
+            tampered["background"]["text"] = "Tampered brief"
+            write_json(brief_path, tampered)
+            self.assertFalse(validate_story(output)["valid"])
+            brief_path.write_bytes(accepted_brief)
+            brief_path.unlink()
+            self.assertFalse(validate_story(output)["valid"])
+            brief_path.write_bytes(accepted_brief)
+            (output / "agent-spec.md").write_text("tampered", encoding="utf-8")
+            self.assertFalse(validate_story(output)["valid"])
+            self.assertEqual(source.read_bytes(), b"historical session snapshot")
+
+
+if __name__ == "__main__":
+    unittest.main()

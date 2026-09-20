@@ -1,0 +1,16 @@
+{
+  "name": "learning-to-spec",
+  "version": "0.5.3",
+  "description": "Export local Copilot sessions into human and agent work specs using Copilot CLI.",
+  "author": {"name": "Local"},
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Learning to Spec",
+    "shortDescription": "Session trajectory, results and next-run instructions",
+    "longDescription": "Read local Copilot events, preserve observable trajectory and decisions, and produce human and agent work specs from one evidence-linked canonical document.",
+    "developerName": "Local",
+    "category": "Productivity",
+    "capabilities": ["Interactive", "Read", "Write"],
+    "defaultPrompt": ["Export a Copilot session into human and agent work specs."]
+  }
+}

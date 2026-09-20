@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "learning-to-spec"
+version = "0.5.3"
+description = "Evidence-linked work specs from GitHub Copilot sessions"
+requires-python = ">=3.10"
+dependencies = []
+
+[project.scripts]
+learning-to-spec = "session_spec.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["session_spec*"]
+
+[tool.setuptools.package-data]
+session_spec = ["templates/*.md", "web/*.cjs", "web/*.html", "web/*.css", "web/*.js", "web/*.json", "web/*.txt"]

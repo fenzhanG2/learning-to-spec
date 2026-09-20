@@ -1,0 +1,199 @@
+import hashlib
+import json
+import shutil
+import tempfile
+import unittest
+from pathlib import Path
+
+from session_spec.agent_handoff import render_agent
+from session_spec.agent_package import LEGACY_PRESENTATION, PRESENTATION
+from session_spec.cli import parser
+from session_spec.pipeline import write_json
+from session_spec.storage import file_hash
+from session_spec.story_pipeline import render_story, run_story, validate_story
+from session_spec.story_refresh import refresh_story
+from test_story_pipeline import FakeBackend, article, brief, edition_review, insights, packet
+
+
+@unittest.skipUnless(shutil.which("node"), "Node.js required for HTML rendering")
+class StoryRefreshTests(unittest.TestCase):
+    def make_story(self, root):
+        source = root / "source/events.jsonl"
+        source.parent.mkdir()
+        source.write_bytes(b"original session")
+        base = root / "base"
+        base.mkdir()
+        write_json(base / "source.json", {"source_path": str(source), "snapshot_bytes": source.stat().st_size,
+                                          "source_sha256": hashlib.sha256(source.read_bytes()).hexdigest()})
+        (base / "evidence.jsonl").write_text("\n".join(json.dumps(event) for event in packet()), encoding="utf-8")
+        backend = FakeBackend([{"article": article(), "brief": brief(), "insights": insights()}, edition_review()])
+        output = root / "published"
+        run_story(None, root / "copilot", output, from_export=base, backend_factory=lambda **settings: backend)
+        return output
+
+    def test_refresh_preserves_reviewed_content_evidence_and_original(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            output = self.make_story(root)
+            support = output / "_support"
+            report = json.loads((support / "story-report.json").read_bytes())
+            report.update(output_schema="story-output/v5", generation_method="actionable-handoff/v2")
+            write_json(support / "agent-presentation.json", LEGACY_PRESENTATION)
+            legacy_article = article(schema="agent-detail/v2")
+            write_json(support / "article.json", legacy_article)
+            edition = json.loads((support / "edition.json").read_bytes())
+            edition["article"] = legacy_article
+            write_json(support / "edition.json", edition)
+            receipt = json.loads((support / "edition-receipt.json").read_bytes())
+            receipt["output_sha256"] = file_hash(support / "edition.json")
+            write_json(support / "edition-receipt.json", receipt)
+            expanded = render_agent(legacy_article, packet(), "zh-CN", trajectory_style="expanded")
+            (output / "agent-spec.md").write_text(expanded, encoding="utf-8")
+            (support / "agent-rendered.md").write_text(expanded, encoding="utf-8")
+            render_story(support, output / "human-spec.html")
+            report["hashes"] = {name: file_hash(output / name) for name in report["hashes"]}
+            report["support_hashes"] = {name: file_hash(support / name) for name in report["support_hashes"]}
+            write_json(support / "story-report.json", report)
+            self.assertTrue(validate_story(output)["valid"])
+            before = {path.relative_to(output): file_hash(path) for path in output.rglob("*") if path.is_file()}
+            destination = root / "refreshed"
+            result = refresh_story(output, destination)
+            self.assertEqual(result["model_calls"], 0)
+            self.assertTrue(validate_story(destination)["valid"])
+            self.assertTrue(validate_story(output)["valid"])
+            self.assertEqual(before, {path.relative_to(output): file_hash(path) for path in output.rglob("*") if path.is_file()})
+            for name in ("article.json", "edition.json", "edition-receipt.json", "tool-ledger.json", "evidence.jsonl", "source.json"):
+                self.assertEqual(file_hash(support / name), file_hash(destination / "_support" / name))
+            new_report = json.loads((destination / "_support/story-report.json").read_bytes())
+            self.assertEqual(new_report["output_schema"], "story-output/v6")
+            self.assertEqual(new_report["presentation_refresh"]["previous_report_sha256"], file_hash(support / "story-report.json"))
+            self.assertEqual(new_report["calls"], [])
+            expected = render_agent(legacy_article, packet(), "zh-CN")
+            self.assertEqual((destination / "agent-spec.md").read_text(encoding="utf-8"), expected)
+            self.assertEqual((destination / "_support/agent-rendered.md").read_text(encoding="utf-8"), expected)
+            self.assertNotIn("Readback:", expected)
+
+    def test_refresh_rejects_overlap_existing_and_tampered_sources(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            output = self.make_story(root)
+            for destination in (output, output / "child", root, root / "source/child"):
+                with self.assertRaises(ValueError):
+                    refresh_story(output, destination)
+            occupied = root / "occupied"
+            occupied.mkdir()
+            (occupied / "keep.md").write_text("user work", encoding="utf-8")
+            with self.assertRaises(ValueError):
+                refresh_story(output, occupied)
+            self.assertEqual((occupied / "keep.md").read_text(encoding="utf-8"), "user work")
+            (output / "agent-spec.md").write_text("tampered", encoding="utf-8")
+            with self.assertRaises(ValueError):
+                refresh_story(output, root / "refused")
+            self.assertFalse((root / "refused").exists())
+
+    def test_refresh_cli_has_no_model_or_language_override(self):
+        arguments = parser().parse_args(["refresh-story", "original", "--out", "new"])
+        self.assertEqual(arguments.directory, Path("original"))
+        self.assertEqual(arguments.out, Path("new"))
+        self.assertFalse(hasattr(arguments, "model"))
+        self.assertFalse(hasattr(arguments, "language"))
+
+    def test_v7_refresh_versions_citation_roles_without_changing_reviewed_content(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            output = self.make_story(root)
+            support = output / "_support"
+            report = json.loads((support / "story-report.json").read_bytes())
+            self.assertEqual(report.pop("evidence_renderer"), "companion/v2")
+            report["output_schema"] = "story-output/v7"
+            write_json(support / "agent-presentation.json", LEGACY_PRESENTATION)
+            legacy = render_agent(article(), packet(), "zh-CN", "handoff-legacy")
+            (output / "agent-spec.md").write_text(legacy, encoding="utf-8")
+            (support / "agent-rendered.md").write_text(legacy, encoding="utf-8")
+            render_story(support, output / "human-spec.html")
+            report["hashes"] = {name: file_hash(output / name) for name in report["hashes"]}
+            report["support_hashes"] = {name: file_hash(support / name) for name in report["support_hashes"]}
+            write_json(support / "story-report.json", report)
+            self.assertTrue(validate_story(output)["valid"])
+            refreshed = root / "refreshed"
+            self.assertEqual(refresh_story(output, refreshed)["model_calls"], 0)
+            self.assertTrue(validate_story(refreshed)["valid"])
+            self.assertTrue(validate_story(output)["valid"])
+            current = json.loads((refreshed / "_support/story-report.json").read_bytes())
+            self.assertEqual(current["evidence_renderer"], "companion/v2")
+            self.assertEqual(current["output_schema"], "story-output/v9")
+            for name in ("article.json", "edition.json", "edition-receipt.json", "input.json"):
+                self.assertEqual(file_hash(support / name), file_hash(refreshed / "_support" / name))
+
+    def test_companion_is_required_hash_bound_and_checked_against_source(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            output = self.make_story(Path(temporary))
+            evidence = output / "evidence.md"
+            original = evidence.read_text(encoding="utf-8")
+            evidence.write_text(original + "\nInvented evidence", encoding="utf-8")
+            report_path = output / "_support/story-report.json"
+            report = json.loads(report_path.read_bytes())
+            report["hashes"]["evidence.md"] = file_hash(evidence)
+            write_json(report_path, report)
+            self.assertIn("Evidence companion differs", str(validate_story(output)["issues"]))
+            evidence.unlink()
+            report["hashes"].pop("evidence.md")
+            write_json(report_path, report)
+            self.assertIn("Required evidence companion", str(validate_story(output)["issues"]))
+
+    def test_markdown_only_handoff_has_no_embedded_content_or_controls(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            output = self.make_story(Path(temporary))
+            html = (output / "human-spec.html").read_text(encoding="utf-8")
+            for expected in ('<code>agent-spec.md</code>', '<code>evidence.md</code>', 'href="#mechanism"'):
+                self.assertIn(expected, html)
+            for forbidden in ('<dialog', '<textarea', '<button', 'data-open-agent', 'id="agent-reader"', 'id="evidence-source"', 'showModal(', 'execCommand(', 'createObjectURL', 'id="e000001"', 'href="agent-spec.md"'):
+                self.assertNotIn(forbidden, html)
+            self.assertNotIn(article()["agent_detail"]["resume"]["checkpoint"], html)
+            self.assertIn('](evidence.md#e000001)', (output / "agent-spec.md").read_text(encoding="utf-8"))
+            self.assertIn('### E000001', (output / "evidence.md").read_text(encoding="utf-8"))
+            self.assertTrue(validate_story(output)["valid"])
+
+    def test_v8_refresh_preserves_both_markdown_files_and_reviews(self):
+        for policy in (None, LEGACY_PRESENTATION):
+            with self.subTest(policy=policy), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                output = self.make_story(root)
+                support = output / "_support"
+                report = json.loads((support / "story-report.json").read_bytes())
+                report.update(output_schema="story-output/v8", evidence_renderer="companion/v2" if policy else "companion/v1")
+                if policy:
+                    write_json(support / "agent-presentation.json", policy)
+                else:
+                    (support / "agent-presentation.json").unlink()
+                    report["support_hashes"].pop("agent-presentation.json")
+                render_story(support, output / "human-spec.html")
+                report["hashes"] = {name: file_hash(output / name) for name in report["hashes"]}
+                report["support_hashes"] = {name: file_hash(support / name) for name in report["support_hashes"]}
+                write_json(support / "story-report.json", report)
+                self.assertTrue(validate_story(output)["valid"])
+                self.assertIn('<dialog', (output / "human-spec.html").read_text(encoding="utf-8"))
+                refreshed = root / "refreshed"
+                self.assertEqual(refresh_story(output, refreshed)["model_calls"], 0)
+                self.assertTrue(validate_story(refreshed)["valid"])
+                self.assertTrue(validate_story(output)["valid"])
+                for name in ("agent-spec.md", "evidence.md", "_support/edition.json", "_support/edition-receipt.json", "_support/input.json"):
+                    self.assertEqual(file_hash(output / name), file_hash(refreshed / name))
+                self.assertEqual(json.loads((refreshed / "_support/agent-presentation.json").read_bytes()), PRESENTATION)
+                self.assertNotIn('<dialog', (refreshed / "human-spec.html").read_text(encoding="utf-8"))
+                again = root / "again"
+                refresh_story(refreshed, again)
+                for name in ("human-spec.html", "agent-spec.md", "evidence.md"):
+                    self.assertEqual(file_hash(refreshed / name), file_hash(again / name))
+
+    def test_markdown_only_policy_cannot_silently_reenable_preview(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            output = self.make_story(Path(temporary))
+            support = output / "_support"
+            write_json(support / "agent-presentation.json", LEGACY_PRESENTATION)
+            report = json.loads((support / "story-report.json").read_bytes())
+            report["support_hashes"]["agent-presentation.json"] = file_hash(support / "agent-presentation.json")
+            render_story(support, output / "human-spec.html")
+            report["hashes"]["human-spec.html"] = file_hash(output / "human-spec.html")
+            write_json(support / "story-report.json", report)
+            self.assertIn("Agent presentation policy is missing or invalid", validate_story(output)["issues"])
