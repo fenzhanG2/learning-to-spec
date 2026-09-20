@@ -5,6 +5,15 @@ import re
 MAX_SOURCE_CHARS = 6000
 
 
+def read_display_text(text):
+    lines = re.split(r"(?<=\n)|(?<=\r)(?!\n)", text)
+    nonempty = [line for line in lines if line.strip()]
+    prefix = re.compile(r"^[ \t]*\d+→")
+    if len(nonempty) < 2 or any(not prefix.match(line) for line in nonempty):
+        return text
+    return "".join(prefix.sub("", line, count=1) for line in lines)
+
+
 def source_payload(event):
     kind = event.get("type", "")
     if kind == "tool.execution_start":

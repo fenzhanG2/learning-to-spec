@@ -12,6 +12,7 @@ from .model_io import generate_json
 from .review_focus import SCHEMA as FOCUS_SCHEMA, review_focus
 from .review_crosswalk import SCHEMA as CROSSWALK_SCHEMA, review_crosswalk
 from .minimization_review import SCHEMA as MINIMIZATION_SCHEMA, minimization_focus, validate_minimization
+from .assertion_scope import SCHEMA as ASSERTION_SCHEMA, assertion_scope
 from .transfer_probe import (ADJUDICATION, SCHEMA as PROBE_SCHEMA, contract as probe_contract, effective_feedback, feedback_context,
                              probe_feedback, resolve_feedback_locations, run_probe, validate_resolutions)
 from .agent_package import EVIDENCE_RENDERER
@@ -155,7 +156,7 @@ def generate_edition(directory, draft, events, backend, article_validator, model
     structure_contract = (PROMPTS / "story-draft.md").read_text(encoding="utf-8")
     brief_contract = (PROMPTS / "story-brief.md").read_text(encoding="utf-8")
     brief_review = (PROMPTS / "story-brief-review.md").read_text(encoding="utf-8")
-    identity = {"schema": EDITION_SCHEMA, "review_protocol": REVIEW_PROTOCOL, "review_focus": FOCUS_SCHEMA, "review_crosswalk": CROSSWALK_SCHEMA, "minimization_focus": MINIMIZATION_SCHEMA, "draft_sha256": fingerprint(draft), "input_sha256": fingerprint(events),
+    identity = {"schema": EDITION_SCHEMA, "review_protocol": REVIEW_PROTOCOL, "review_focus": FOCUS_SCHEMA, "review_crosswalk": CROSSWALK_SCHEMA, "minimization_focus": MINIMIZATION_SCHEMA, "assertion_scope": ASSERTION_SCHEMA, "draft_sha256": fingerprint(draft), "input_sha256": fingerprint(events),
                 "contract_sha256": digest((contract + brief_contract + brief_review + structure_contract).encode()),
                 "model": model or "copilot-default", "prior_findings_sha256": fingerprint(prior_findings or []),
                 "feedback_sha256": fingerprint(feedback or [])}
@@ -250,11 +251,14 @@ def generate_edition(directory, draft, events, backend, article_validator, model
                 write_json(directory / f"edition-crosswalk-{attempt}.json", {"candidate_sha256": candidate_hash, **crosswalk})
                 minimization = minimization_focus(edition, events)
                 write_json(directory / f"edition-minimization-{attempt}.json", {"candidate_sha256": candidate_hash, **minimization})
+                assertions = assertion_scope(edition, events)
+                write_json(directory / f"edition-assertions-{attempt}.json", {"candidate_sha256": candidate_hash, **assertions})
                 review_fields = "issues/suggestions/checked/summary/minimization" + ("/feedback_resolution" if current_feedback else "")
                 review_prompt = (contract + context + feedback_context(current_feedback) + "\n\nCURRENT_EDITION\n" + json.dumps(edition, ensure_ascii=False)
                                  + "\n\nREVIEW_FOCUS (deterministic excerpts of this same edition, not evidence or extra authority)\n" + json.dumps(focus, ensure_ascii=False)
                                  + "\n\nSOURCE_CLAIM_CROSSWALK (citation-locality aid, not proof; verify exact source and all visible counterparts)\n" + json.dumps(crosswalk, ensure_ascii=False)
                                  + "\n\nMINIMIZATION_FOCUS (reduced-source locality, not original private content or a keyword ban)\n" + json.dumps(minimization, ensure_ascii=False)
+                                 + "\n\nASSERTION_SCOPE (source syntax and hypothetical logical counterexamples, never historical test execution)\n" + json.dumps(assertions, ensure_ascii=False)
                                  + "\n\nPRIOR_REPAIR_FINDINGS (historical review findings, not current facts; recheck against source and every visible counterpart)\n"
                                  + json.dumps(prior_review_findings(receipt["failures"]), ensure_ascii=False)
                                  + "\n\nDETERMINISTIC_CHECKS\n[]"

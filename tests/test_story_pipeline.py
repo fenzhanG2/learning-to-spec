@@ -162,6 +162,15 @@ class StorySchemaTests(unittest.TestCase):
         review["issues"][0]["evidence"][0]["quote"] = 'const value = "two spaces"\nreturn value'
         self.assertTrue(validate_grounding(review, draft, evidence, ""))
 
+    def test_source_grounding_does_not_strip_real_arrows_from_string_operands(self):
+        draft = {"article": article(), "insights": insights(), "brief": brief()}
+        text = 'assert output == """\n1→alpha\n2→beta\n"""'
+        evidence = packet() + [{"ref": "E000003", "type": "tool.execution_complete", "tool": "Read", "result": {"content": text}}]
+        review = edition_review([{"evidence": [{"ref": "E000003", "origin": "tool", "quote": text}]}])
+        self.assertEqual(validate_grounding(review, draft, evidence, ""), [])
+        review["issues"][0]["evidence"][0]["quote"] = 'assert output == """\nalpha\nbeta\n"""'
+        self.assertTrue(validate_grounding(review, draft, evidence, ""))
+
     def test_agent_cannot_offer_refs_without_providing_any(self):
         candidate = article()
         candidate["agent_markdown"] = "# Handoff\nConsult refs in the supporting evidence."
