@@ -132,6 +132,33 @@ def quote_basis(event, origin, quote):
     return None
 
 
+def source_quote_origins(event):
+    return [origin for origin in ("human", "assistant", "tool", "context")
+            if any(isinstance(value, str) and value for value in source_values(event, origin))]
+
+
+def source_quote_diagnostic(event, origin, quote):
+    origins = source_quote_origins(event)
+    matching = [candidate for candidate in origins if quote_basis(event, candidate, quote)]
+    valid_origin = isinstance(origin, str) and origin in ("human", "assistant", "tool", "context")
+    origin_label = origin if valid_origin else "<invalid origin>"
+    fields = source_values(event, origin) if valid_origin else []
+    candidates = [line for value in fields for line in value.splitlines() if line.strip()]
+    nearby = difflib.get_close_matches(str(quote)[:500], candidates, n=1, cutoff=0.05)
+    hint = nearby[0][:700] if nearby else (candidates[0][:700] if candidates else "")
+    reference = event.get("ref")
+    source_type = event.get("type")
+    reference_label = repr(reference[:80]) if isinstance(reference, str) else "<invalid ref>"
+    type_label = repr(source_type[:80]) if isinstance(source_type, str) else "<invalid type>"
+    message = (f"Source {reference_label} type={type_label}: quotation does not exist for origin={origin_label}. "
+            f"Available observable quote origins: {origins}; literal matches at this ref: {matching}. "
+            "Origin is the payload channel, not the actor inferred to have authored a tool argument. "
+            "Keep the actual source role and a short continuous literal quote, including Markdown and whitespace. "
+            "This diagnostic does not change the quote, role, reference or verdict; verify the source and claim before correcting the review. "
+            + ("Actual source line excerpt at the requested origin (navigation only): " + repr(hint)[:700] if hint else ""))
+    return message[:1800]
+
+
 def string_locations(value, path=""):
     if isinstance(value, str):
         yield path, value
@@ -229,7 +256,7 @@ def validate_grounding(review, edition, events, contract):
             source_quote = anchor.get("quote")
             supported = bool(quote_basis(event, origin, source_quote))
             if not supported:
-                errors.append(prefix + f"{anchor['ref']} quotation does not exist for origin={origin}; use a short literal source span with the correct role and reference")
+                errors.append(prefix + source_quote_diagnostic(event, origin, source_quote))
             human_support |= bool(supported and origin == "human")
         if kind == "human_requirement" and not human_support:
             errors.append(prefix + "user intent/choice/authorization needs a literal human-input quotation")

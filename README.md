@@ -130,6 +130,8 @@ Each retained Agent rationale receives a separate, source-local review dispositi
 
 Phase citations are not exclusive time ranges: one message can explain a decision and introduce the next phase. Potentially later sources require an explicit temporal adjudication, not an automatic backdating verdict or duplicated aggregate citations. This judgment is still semantic, not a chronology proof.
 
+Failed source-quote checks report the observed payload channel and a bounded literal navigation hint. An assistant-authored tool argument still uses the tool channel; rendered Markdown is not raw source text. Diagnostics never silently rewrite a quote, change its source role or accept the finding. The existing bounded review retry must still return valid evidence, and literal evidence does not establish semantic correctness.
+
 See [output contract](docs/output-contract.md), [privacy threat model and research](docs/privacy-design.md) and [source/license notices](third_party/NOTICES.md). Reference projects are not runtime dependencies.
 
 ## Compatibility
