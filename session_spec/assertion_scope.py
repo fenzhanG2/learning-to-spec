@@ -1,14 +1,13 @@
 import ast
 import json
-import re
 import warnings
 
 from .review_crosswalk import cited_claims
-from .source_excerpt import excerpt_segments, source_payload
+from .source_excerpt import excerpt_segments, read_display_text, source_payload
 from .story_grounding import text_values
 
 
-SCHEMA = "assertion-scope/v1"
+SCHEMA = "assertion-scope/v2"
 MAX_PAYLOAD_CHARS = 40000
 MAX_INDEX_CHARS = 24000
 MAX_ASSERTIONS = 24
@@ -50,12 +49,16 @@ def assertion_scope(edition, events):
                 skipped_payloads += 1
                 continue
             normalized = text
-            if len(re.findall(r"^\s*\d+→", text, re.MULTILINE)) >= 2:
-                normalized = re.sub(r"^[ \t]*\d+→", "", text, flags=re.MULTILINE)
             try:
                 with warnings.catch_warnings():
                     warnings.simplefilter("ignore", SyntaxWarning)
-                    tree = ast.parse(normalized)
+                    try:
+                        tree = ast.parse(text)
+                    except SyntaxError:
+                        normalized = read_display_text(text)
+                        if normalized == text:
+                            raise
+                        tree = ast.parse(normalized)
             except (SyntaxError, ValueError, RecursionError):
                 skipped_payloads += 1
                 continue

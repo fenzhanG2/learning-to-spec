@@ -7,6 +7,8 @@ from pathlib import Path
 from session_spec.assertion_scope import MAX_ASSERTIONS, MAX_INDEX_CHARS, MAX_PAYLOAD_CHARS, SCHEMA, assertion_scope
 from session_spec.story_article import validate_article
 from session_spec.story_editor import generate_edition
+from session_spec.source_excerpt import read_display_text
+from session_spec.story_grounding import quote_basis
 from test_story_pipeline import FakeBackend, article, brief, edition_review, insights, packet
 
 
@@ -72,6 +74,39 @@ class AssertionScopeTests(unittest.TestCase):
         output = assertion_scope({}, [source(" 1→assert result.endswith('x')\n 2→assert result == expected")])
         self.assertEqual(output["recognized_assertions"], 2)
         self.assertTrue(all(row["normalization"] == "read_line_prefixes_removed" for row in output["assertions"]))
+
+    def test_arrows_in_real_python_string_operands_are_not_display_prefixes(self):
+        text = 'assert output == """\n1→alpha\n2→beta\n"""'
+        output = assertion_scope({}, [source(text)])
+        row = output["assertions"][0]
+        self.assertEqual(row["quote"], text)
+        self.assertEqual(row["normalization"], "none")
+
+    def test_numbered_multiline_source_preserves_inner_arrows_and_mixed_wrappers_skip(self):
+        text = '10→assert output == """\n11→1→alpha\n12→2→beta\n13→"""'
+        output = assertion_scope({}, [source(text)])
+        self.assertEqual(output["assertions"][0]["quote"], 'assert output == """\n1→alpha\n2→beta\n"""')
+        mixed = assertion_scope({}, [source('file header\n1→assert output == expected\n2→assert output.endswith("x")')])
+        self.assertEqual(mixed["assertions"], [])
+        self.assertEqual(mixed["unparsed_or_large_payloads"], 1)
+
+    def test_only_physical_line_boundaries_are_read_wrappers(self):
+        for ending in ("\n", "\r", "\r\n"):
+            with self.subTest(ending=ending):
+                text = '1→assert output == "one"' + ending + '2→assert output == "two"'
+                self.assertEqual(read_display_text(text), 'assert output == "one"' + ending + 'assert output == "two"')
+
+    def test_unicode_separators_inside_operands_survive_indexing_and_grounding(self):
+        for separator in ("\u2028", "\u2029", "\x85", "\x0b", "\x0c"):
+            with self.subTest(separator=separator):
+                statement = 'assert output == "alpha' + separator + '2→beta"'
+                text = "10→" + statement + "\r\n11→assert output == expected"
+                event = source(text)
+                output = assertion_scope({}, [event])
+                self.assertEqual(output["assertions"][0]["quote"], statement)
+                self.assertIn("2→beta", read_display_text(text))
+                self.assertEqual(quote_basis(event, "tool", statement), "literal")
+                self.assertIsNone(quote_basis(event, "tool", statement.replace("2→", "")))
 
     def test_unsupported_or_oversized_payloads_and_budget_omissions_are_explicit(self):
         events = [source("not valid code >>>", "E000001"), source("x" * (MAX_PAYLOAD_CHARS + 1), "E000002")]

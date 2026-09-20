@@ -3,6 +3,8 @@ import difflib
 import json
 import re
 
+from .source_excerpt import read_display_text
+
 
 def text_values(value):
     if isinstance(value, str):
@@ -123,8 +125,8 @@ def quote_basis(event, origin, quote):
         return "literal"
     if origin == "tool" and str(event.get("tool", "")).casefold() in {"read", "read_file", "view"}:
         for value in text_values(event.get("result", {})):
-            if len(re.findall(r"^\s*\d+→", value, re.MULTILINE)) >= 2:
-                plain = re.sub(r"^[ \t]*\d+→", "", value, flags=re.MULTILINE)
+            plain = read_display_text(value)
+            if plain != value:
                 if quote in plain:
                     return "read_display_line_prefixes_removed"
     return None
