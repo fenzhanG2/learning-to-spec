@@ -228,3 +228,19 @@ test('late destination response cannot re-enable a stale upload', async () => {
   assert.equal(example.elements.publish.disabled, true);
   assert.equal(vm.runInContext('state.plan', example.context), null);
 });
+
+test('late destination response cannot restore a plan after disconnection', async () => {
+  const example = await fixture();
+  vm.runInContext("state.job = 'synthetic'; state.manifest = {};", example.context);
+  example.elements['site-name'].value = 'synthetic';
+  let finish;
+  example.responses['/api/plan'] = () => new Promise(resolve => { finish = resolve; });
+  const pending = vm.runInContext('refreshPlan()', example.context);
+  example.responses['/api/jobs'] = () => { throw new TypeError('Connection lost'); };
+  await vm.runInContext("perform(() => request('/api/jobs'))", example.context);
+  finish({ plan_id: 'stale' });
+  await pending;
+  assert.equal(vm.runInContext('state.plan', example.context), null);
+  assert.equal(example.elements['destination-card'].hidden, true);
+  assert.equal(example.elements.publish.disabled, true);
+});

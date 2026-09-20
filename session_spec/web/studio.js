@@ -43,9 +43,8 @@ function disconnected() {
     : state.durableJobs === true ? `Ask Copilot to reopen learning-to-spec${identifier ? ` job ${identifier}` : ' Studio'}.`
       : `Reopen Studio from Copilot, or restart its manual command.${identifier ? ` Previous job: ${identifier}.` : ''}`;
   state.connectionError = `Studio connection lost or response incomplete. ${recovery} Check saved status before retrying: an operation may already have started. Unsubmitted choices may need selecting again.`;
-  state.plan = null;
   state.generationRetry = false;
-  updateControls();
+  invalidatePlan();
   return new Error(state.connectionError);
 }
 async function localFetch(path, options) {
