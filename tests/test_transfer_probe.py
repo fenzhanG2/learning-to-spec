@@ -35,6 +35,16 @@ def review_with_resolution(index=0, status="not_applicable", issues=None):
 
 
 class TransferProbeTests(unittest.TestCase):
+    def test_probe_accepts_versioned_citations_but_not_unknown_renderers(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            record = run_probe(draft(), packet(), FakeBackend([transfer_review()]), Path(temporary))
+            self.assertEqual(record["identity"]["renderer"], "companion/v6")
+            self.assertEqual(validate_record(record, packet()), [])
+            for renderer in ("companion/v999", [], {}, None, 6, True):
+                with self.subTest(renderer=renderer):
+                    record["identity"]["renderer"] = renderer
+                    self.assertIn("Transfer probe candidate or contract binding is invalid", validate_record(record, packet()))
+
     def test_reader_gets_only_the_delivered_pair_and_no_full_source_or_human_draft(self):
         events = packet() + [{"ref": "E000099", "type": "assistant.message", "text": "UNSELECTED_SOURCE_CANARY"}]
         candidate = draft()

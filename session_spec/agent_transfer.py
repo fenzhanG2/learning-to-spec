@@ -148,8 +148,9 @@ def decision_phase(phase, ledger, label):
 
 
 def render_transfer(article, events, ledger, language, trajectory_style="decisions"):
-    payload_aware = trajectory_style in {"handoff-portable-v2", "handoff-portable-v3"}
-    portable = trajectory_style in {"handoff-portable", "handoff-portable-v2", "handoff-portable-v3"}
+    scoped_citations = trajectory_style == "handoff-portable-v4"
+    payload_aware = trajectory_style in {"handoff-portable-v2", "handoff-portable-v3", "handoff-portable-v4"}
+    portable = trajectory_style in {"handoff-portable", "handoff-portable-v2", "handoff-portable-v3", "handoff-portable-v4"}
     separate = trajectory_style == "handoff-split" or portable
     if separate:
         trajectory_style = "handoff"
@@ -209,7 +210,7 @@ def render_transfer(article, events, ledger, language, trajectory_style="decisio
     plan = inline_tool_plan(detail, events, ledger) if trajectory_style == "expanded" else [None] * len(detail["trajectory"])
     for phase, placement in zip(detail["trajectory"], plan):
         if evidence_index:
-            lines.extend(handoff_phase(phase, evidence_index))
+            lines.extend(handoff_phase(phase, evidence_index, scoped_citations=scoped_citations))
             continue
         if trajectory_style == "decisions":
             lines.extend(decision_phase(phase, ledger, label))

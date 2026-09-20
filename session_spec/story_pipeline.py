@@ -232,14 +232,16 @@ def validate_story(directory):
             errors.append("Unknown evidence renderer policy")
     if report.get("output_schema") in {"story-output/v8", "story-output/v9"}:
         markdown_files = report["output_schema"] == "story-output/v9"
-        if report.get("evidence_renderer") not in ({"companion/v2", "companion/v3", "companion/v4", EVIDENCE_RENDERER} if markdown_files else {"companion/v1", "companion/v2"}):
+        if report.get("evidence_renderer") not in ({"companion/v2", "companion/v3", "companion/v4", "companion/v5", EVIDENCE_RENDERER} if markdown_files else {"companion/v1", "companion/v2"}):
             errors.append("Unknown companion evidence renderer policy")
         if markdown_files and report.get("evidence_renderer") == "companion/v3":
             trajectory_style = "handoff-portable"
         if markdown_files and report.get("evidence_renderer") == "companion/v4":
             trajectory_style = "handoff-portable-v2"
-        if markdown_files and report.get("evidence_renderer") == EVIDENCE_RENDERER:
+        if markdown_files and report.get("evidence_renderer") == "companion/v5":
             trajectory_style = "handoff-portable-v3"
+        if markdown_files and report.get("evidence_renderer") == EVIDENCE_RENDERER:
+            trajectory_style = "handoff-portable-v4"
         if markdown_files or report.get("evidence_renderer") == "companion/v2":
             policy = support / "agent-presentation.json"
             expected_policy = PRESENTATION if markdown_files else LEGACY_PRESENTATION
@@ -254,7 +256,7 @@ def validate_story(directory):
     if human_policy.is_file():
         if "human-presentation.json" not in report["support_hashes"] or json.loads(human_policy.read_bytes()) != HUMAN_PRESENTATION:
             errors.append("Human presentation policy is missing or invalid")
-    elif report.get("evidence_renderer") in {"companion/v4", EVIDENCE_RENDERER}:
+    elif report.get("evidence_renderer") in {"companion/v4", "companion/v5", EVIDENCE_RENDERER}:
         errors.append("Human presentation policy is missing or invalid")
     if report.get("output_schema") in ("story-output/v4", "story-output/v5", "story-output/v6", "story-output/v7", "story-output/v8", "story-output/v9"):
         errors.extend(validate_agent_detail(article.get("agent_detail"), packet))

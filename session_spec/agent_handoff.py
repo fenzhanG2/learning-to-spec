@@ -117,7 +117,7 @@ def render_agent(article, events, language="en", trajectory_style=None):
     if not detail:
         return article["agent_markdown"]
     if detail.get("schema") in {"agent-detail/v2", "agent-detail/v3"}:
-        style = trajectory_style or ("handoff-portable-v3" if detail["schema"] == "agent-detail/v3" else "decisions")
+        style = trajectory_style or ("handoff-portable-v4" if detail["schema"] == "agent-detail/v3" else "decisions")
         return render_transfer(article, events, tool_ledger(events), language, style)
     chinese = language.startswith("zh")
     label = lambda english, translated: translated if chinese else english

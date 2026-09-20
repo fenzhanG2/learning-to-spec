@@ -12,6 +12,35 @@ from test_story_pipeline import article, brief, insights, packet
 
 
 class AgentEvidenceTests(unittest.TestCase):
+    def test_accounting_only_aside_cannot_displace_the_rationale_source(self):
+        candidate = article()
+        reason = "Use the wrapper to avoid changing the existing function."
+        aside = "An unrelated greeting about music."
+        events = [{"ref": "E000000", "type": "user.message", "text": aside, "human_input": aside}, *packet(),
+                  {"ref": "E000003", "type": "assistant.message", "text": reason}]
+        candidate["human_input_coverage"].insert(0, {"ref": "E000000", "treatment": "Non-task accounting only."})
+        phase = candidate["agent_detail"]["trajectory"][0]
+        phase["human_refs"].insert(0, "E000000")
+        phase["rationale"] = {"basis": "recorded", "text": reason, "refs": ["E000003"]}
+        self.assertEqual(validate_article(candidate, events), [])
+        files = render_agent_package(candidate, events, "en")
+        rationale_line = next(line for line in files["agent-spec.md"].splitlines() if line.startswith("Rationale ["))
+        self.assertIn("evidence.md#e000003", rationale_line)
+        self.assertIn("### E000003", files["evidence.md"])
+        self.assertIn(reason, files["evidence.md"])
+        self.assertNotIn(aside, files["agent-spec.md"])
+        legacy = render_agent_package(candidate, events, "en", "handoff-portable-v3")
+        self.assertNotIn("### E000003", legacy["evidence.md"])
+        self.assertIn(aside, legacy["evidence.md"])
+        self.assertEqual(phase["human_refs"], ["E000000", "E000001"])
+
+    def test_absent_rationale_does_not_add_empty_citations(self):
+        candidate = article()
+        candidate["agent_detail"]["trajectory"][0]["rationale"] = {"basis": "not_recorded", "text": "", "refs": []}
+        output = render_agent_package(candidate, packet(), "en")["agent-spec.md"]
+        self.assertNotIn("Rationale [", output)
+        self.assertNotIn("()", output)
+
     def test_patch_only_requests_are_present_bounded_and_legacy_compatible(self):
         events = [{"ref": "E000001", "type": "tool.execution_start", "tool": "apply_patch", "tool_call_id": "patch-call",
                    "arguments": {"patch": "*** Begin Patch\n*** Update File: module.py\n" + "LONG_PATCH_BODY" * 1000}}]
