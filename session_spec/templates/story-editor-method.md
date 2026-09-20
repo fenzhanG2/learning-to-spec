@@ -65,3 +65,9 @@
 # Generalized source provenance
 
 `[GENERALIZED_DETAIL_N: ...]` marks an exporter-approved abstraction, not a verbatim historical statement or tool observation. Do not upgrade it into evidence of successful execution, original authorization or an inferred private fact. Preserve necessary constraints while describing the evidence boundary honestly.
+
+## Assertion strength and conditional reuse
+
+- A test name or an aggregate pass count does not establish the meaning of every assertion. Read the actual assertion before saying an input is unchanged, passed through, preserved exactly, rejected, or fully covered. A suffix/prefix/containment assertion checks that relationship, not whole-value equality: added text can satisfy a suffix check. A test merely labelled "empty span" does not establish that replacing an empty range leaves the entire message identical. If source code and an overstrong paraphrase disagree, keep the recorded test result but narrow the claim to what the assertion actually checks; do not invent a failing run or silently change the source.
+- Check every recipe action against its own applicability and adaptation conditions. If the target may use either an inclusive or exclusive boundary, first determine its contract and branch accordingly; do not follow that warning with an unconditional instruction to use one convention. The historical fix is an example, not the destination task's specification.
+- For a claimed equivalence or universal behavior, try a small source-grounded counterexample or neutral hypothetical input against the described operation and the actual assertion. This is a semantic consistency check, not execution evidence: do not report an invented run, reconstruct private values, or export hidden reasoning. Record only a concise grounded finding when the implication fails.
