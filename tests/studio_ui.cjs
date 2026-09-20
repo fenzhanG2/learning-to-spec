@@ -106,6 +106,77 @@ test('authentication errors are concise without discarding diagnostics or auto-r
   assert.equal(example.elements['error-text'].textContent, '');
 });
 
+test('lost generation connection keeps choices, names the saved job and never retries blindly', async () => {
+  const example = await fixture();
+  await example.click('scan');
+  vm.runInContext("state.choices = { personal: { action: 'remove' } }", example.context);
+  example.responses['/api/generate'] = () => { throw new TypeError('Failed to fetch'); };
+  await example.click('generate');
+  assert.match(example.elements.status.textContent, /reopen learning-to-spec job synthetic/);
+  assert.match(example.elements.status.textContent, /may already have started/);
+  assert.match(example.elements.status.textContent, /Unsubmitted choices/);
+  assert.equal(example.elements.generate.disabled, true);
+  assert.equal(example.elements.generate.textContent, 'Generate spec →');
+  assert.equal(vm.runInContext('state.choices.personal.action', example.context), 'remove');
+  await example.click('generate');
+  assert.equal(example.calls.filter(call => call.route === '/api/generate').length, 1);
+});
+
+test('lost polling connection is not presented as failed generation', async () => {
+  const example = await fixture();
+  await example.click('scan');
+  vm.runInContext("state.choices = { personal: { action: 'remove' } }", example.context);
+  example.responses['/api/status?job=synthetic'] = () => { throw new TypeError('NetworkError'); };
+  await example.click('generate');
+  assert.equal(example.elements['review-panel'].hidden, false);
+  assert.match(example.elements.status.textContent, /Check saved status/);
+  assert.equal(example.elements.generate.disabled, true);
+  assert.equal(example.elements.generate.textContent, 'Generate spec →');
+});
+
+test('lost upload connection invalidates approval and blocks duplicate writes', async () => {
+  const example = await fixture();
+  vm.runInContext("state.job = 'synthetic'; show('output')", example.context);
+  await example.click('prepare-share');
+  const choice = example.document.querySelectorAll('[data-finding]')[0];
+  choice.value = 'keep'; choice.listeners.change();
+  example.responses['/api/publish'] = () => { throw new TypeError('Failed to fetch'); };
+  await example.click('publish');
+  assert.equal(example.elements.publish.disabled, true);
+  assert.equal(vm.runInContext('state.plan', example.context), null);
+  assert.match(example.elements.status.textContent, /may already have started/);
+  await example.click('publish');
+  assert.equal(example.calls.filter(call => call.route === '/api/publish').length, 1);
+});
+
+test('download connection failure gives recovery without triggering generation', async () => {
+  const example = await fixture();
+  vm.runInContext("state.job = 'synthetic'; show('output')", example.context);
+  example.responses['/api/file?job=synthetic&name=agent-spec.md'] = () => { throw new TypeError('Failed to fetch'); };
+  await vm.runInContext("perform(() => file('agent-spec.md'))", example.context);
+  assert.match(example.elements.status.textContent, /Studio connection lost/);
+  assert.equal(example.calls.some(call => call.route === '/api/generate'), false);
+});
+
+test('a response interrupted after request acceptance also blocks blind retries', async () => {
+  const example = await fixture();
+  await example.click('scan');
+  vm.runInContext("state.choices = { personal: { action: 'remove' } }; fetch = async () => ({ ok: true, json: async () => { throw new TypeError('Connection closed'); } });", example.context);
+  await example.click('generate');
+  assert.match(example.elements.status.textContent, /response incomplete/);
+  assert.equal(example.elements.generate.disabled, true);
+  assert.equal(example.elements.generate.textContent, 'Generate spec →');
+});
+
+test('recovery guidance never includes a private access capability', async () => {
+  const example = await fixture();
+  vm.runInContext("parameters.set('job', 'a'.repeat(32)); fetch = async () => { throw new TypeError('Failed to fetch'); };", example.context);
+  await vm.runInContext("perform(() => request('/api/jobs'))", example.context);
+  assert.match(example.elements.status.textContent, /job a{32}/);
+  assert.doesNotMatch(example.elements.status.textContent, /access|fixture|Bearer/);
+  assert.doesNotMatch(example.elements['error-text'].textContent, /access|fixture|Bearer/);
+});
+
 test('a new review never claims privacy decisions have already been saved', async () => {
   const example = await fixture();
   example.responses['/api/status?job=synthetic'] = { stage: 'scan', status: 'done' };
