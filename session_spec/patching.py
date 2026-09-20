@@ -13,7 +13,7 @@ def apply_data_patches(spec, response, allowed_roots):
     if not isinstance(patches, list) or not patches or len(patches) > 150:
         raise ValueError("Expected between 1 and 150 bounded spec patches.")
     result = copy.deepcopy(spec)
-    for patch in patches:
+    for patch_number, patch in enumerate(patches, 1):
         if not isinstance(patch, dict) or patch.get("op") not in {"add", "replace", "remove"}:
             raise ValueError("Only add, replace and remove data operations are allowed.")
         path = patch.get("path")
@@ -54,7 +54,8 @@ def apply_data_patches(spec, response, allowed_roots):
                     parent.pop(index)
             elif isinstance(parent, dict):
                 if operation != "add" and key not in parent:
-                    raise ValueError("Spec patch targets a missing field.")
+                    advice = " Use add to create the missing field under its existing parent." if operation == "replace" else " Remove only an existing field."
+                    raise ValueError("Spec patch targets a missing field." + advice)
                 if operation == "remove":
                     del parent[key]
                 else:
@@ -62,5 +63,7 @@ def apply_data_patches(spec, response, allowed_roots):
             else:
                 raise ValueError("Spec patch targets a scalar parent.")
         except (KeyError, IndexError, TypeError) as error:
-            raise ValueError("Spec patch path does not exist: " + path) from error
+            raise ValueError(f"Patch {patch_number} ({operation} at {path!r}): parent path does not exist; add the missing container before its children.") from error
+        except ValueError as error:
+            raise ValueError(f"Patch {patch_number} ({operation} at {path!r}): {error}") from error
     return result
