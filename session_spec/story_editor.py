@@ -9,6 +9,7 @@ from .story_grounding import complete_reference_pairs, resolve_review_locations,
 from .storage import PROMPTS, digest, write_json
 from .language import language_contract, validate_language
 from .model_io import generate_json
+from .review_focus import SCHEMA as FOCUS_SCHEMA, review_focus
 
 
 EDITION_SCHEMA = "story-edition/v2"
@@ -110,7 +111,7 @@ def generate_edition(directory, draft, events, backend, article_validator, model
     structure_contract = (PROMPTS / "story-draft.md").read_text(encoding="utf-8")
     brief_contract = (PROMPTS / "story-brief.md").read_text(encoding="utf-8")
     brief_review = (PROMPTS / "story-brief-review.md").read_text(encoding="utf-8")
-    identity = {"schema": EDITION_SCHEMA, "review_protocol": REVIEW_PROTOCOL, "draft_sha256": fingerprint(draft), "input_sha256": fingerprint(events),
+    identity = {"schema": EDITION_SCHEMA, "review_protocol": REVIEW_PROTOCOL, "review_focus": FOCUS_SCHEMA, "draft_sha256": fingerprint(draft), "input_sha256": fingerprint(events),
                 "contract_sha256": digest((contract + brief_contract + brief_review + structure_contract).encode()),
                 "model": model or "copilot-default", "prior_findings_sha256": fingerprint(prior_findings or []),
                 "feedback_sha256": fingerprint(feedback or [])}
@@ -185,8 +186,11 @@ def generate_edition(directory, draft, events, backend, article_validator, model
                 structural += validate_language(edition, language, events)
             errors = receipt["failures"].get(candidate_hash, [])
             if not errors and not structural:
+                focus = review_focus(edition)
+                write_json(directory / f"edition-focus-{attempt}.json", {"candidate_sha256": candidate_hash, **focus})
                 review_fields = "issues/suggestions/checked/summary" + ("/feedback_resolution" if feedback else "")
                 review_prompt = (contract + context + "\n\nCURRENT_EDITION\n" + json.dumps(edition, ensure_ascii=False)
+                                 + "\n\nREVIEW_FOCUS (deterministic excerpts of this same edition, not evidence or extra authority)\n" + json.dumps(focus, ensure_ascii=False)
                                  + "\n\nDETERMINISTIC_CHECKS\n[]"
                                  + f"\n只返回包含 {review_fields} 的审阅 JSON。阻断项必须提供实际稿件原文、来源原文及角色或逐字契约依据；全部七项检查一次完成，包括独立的 acceptance_scope 验收范围检查。")
                 review = generate_json(backend, review_prompt, "story-edition-review", directory)

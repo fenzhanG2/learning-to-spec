@@ -1,6 +1,6 @@
 {
   "name": "learning-to-spec",
-  "version": "0.6.6",
+  "version": "0.6.7",
   "description": "Export a Copilot session into evidence-linked human and agent specs, preserving trajectory, outcomes and next-run methods.",
   "skills": ["./skills/"],
   "mcpServers": "./.mcp.json"
