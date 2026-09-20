@@ -119,8 +119,9 @@ class DurableWorkflowTests(unittest.TestCase):
 
     def wait_job(self, identifier):
         for attempt in range(200):
-            if self.studio.jobs[identifier]["status"] != "running":
-                return self.studio.jobs[identifier]
+            with self.studio.lock:
+                if self.studio.jobs[identifier]["status"] != "running":
+                    return self.studio.jobs[identifier]
             time.sleep(0.01)
         self.fail("Worker did not finish")
 

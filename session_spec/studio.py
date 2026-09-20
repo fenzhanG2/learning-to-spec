@@ -1,3 +1,4 @@
+import copy
 import hmac
 import hashlib
 import json
@@ -281,10 +282,11 @@ def handler_for(studio):
                     return
                 job = studio.job(query.get("job", [None])[0])
                 if parsed.path == "/api/status":
-                    result = {key: value for key, value in job.items() if key not in {"directory", "review_directory", "generation", "package", "plan"}}
-                    result["publication_attempted"] = "package" in job and (job["package"] / "publication.json").exists()
-                    if "delivery_result" not in result and job["stage"] == "generate" and job["status"] == "done":
-                        result["delivery_result"] = job.get("result")
+                    with studio.action_lock, studio.lock:
+                        result = copy.deepcopy({key: value for key, value in job.items() if key not in {"directory", "review_directory", "generation", "package", "plan"}})
+                        result["publication_attempted"] = "package" in job and (job["package"] / "publication.json").exists()
+                        if "delivery_result" not in result and job["stage"] == "generate" and job["status"] == "done":
+                            result["delivery_result"] = copy.deepcopy(job.get("result"))
                     self.send(200, result)
                 elif parsed.path == "/api/review":
                     review, baseline = load_review(job.get("review_directory", job["directory"] / "review"))
