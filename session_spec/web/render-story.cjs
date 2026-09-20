@@ -12,7 +12,9 @@ const agentPresentation = fs.existsSync(path.join(input, 'agent-presentation.jso
 const markdownFiles = agentPresentation.schema === 'agent-presentation/v2' && agentPresentation.mode === 'markdown-files';
 if (!markdownFiles && fs.existsSync(path.join(input, 'agent-rendered.md'))) article.agent_markdown = fs.readFileSync(path.join(input, 'agent-rendered.md'), 'utf8');
 const presentationPath = path.join(input, 'presentation.json');
-const presentation = fs.existsSync(presentationPath) ? read('presentation.json') : { category: translate('一段真实的技术工作'), routeIcons: ['Compass', 'Route', 'Workflow', 'PackageCheck', 'Flag'] };
+const humanPresentation = fs.existsSync(path.join(input, 'human-presentation.json')) ? read('human-presentation.json') : null;
+if (humanPresentation && (humanPresentation.schema !== 'human-presentation/v1' || humanPresentation.source_heading !== 'neutral')) throw new Error('Unknown Human presentation policy');
+const presentation = fs.existsSync(presentationPath) ? read('presentation.json') : { category: translate(humanPresentation ? '工程会话记录' : '一段真实的技术工作'), routeIcons: ['Compass', 'Route', 'Workflow', 'PackageCheck', 'Flag'] };
 presentation.language = language;
 const brief = fs.existsSync(path.join(input, 'brief.json')) ? read('brief.json') : undefined;
 const evidencePath = path.join(input, 'evidence-rendered.md');

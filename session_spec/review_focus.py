@@ -1,7 +1,7 @@
 import re
 
 
-SCHEMA = "review-focus/v2"
+SCHEMA = "review-focus/v3"
 
 
 def review_focus(edition):
@@ -28,7 +28,8 @@ def review_focus(edition):
                     and field in {"trigger", "action", "precondition", "expected", "otherwise", "done_when", "stop_when"}
                     or path.startswith("/article/agent_detail/paths/") and field == "reuse_condition"):
                 handoff_conditions.append({"path": path, "quote": value})
-            if (path.startswith("/brief/") and field in {"text", "kind"}
+            if (path == "/article/agent_markdown"
+                    or path.startswith("/brief/") and field in {"text", "kind"}
                     or path.startswith("/insights/closing/paragraphs/")
                     or path.startswith("/article/agent_detail/recipes/")
                     and (field in {"when", "adapt", "avoid", "verify"} or "/procedure/" in path)):

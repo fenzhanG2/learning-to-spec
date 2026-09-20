@@ -18,7 +18,7 @@ from .story_editor import generate_edition, validate_edition, validate_feedback,
 from .privacy import sanitize
 from .story_insights import validate_insights
 from .agent_handoff import render_agent, tool_ledger, validate_agent_detail
-from .agent_package import LEGACY_PRESENTATION, PRESENTATION, render_agent_package, write_agent_package
+from .agent_package import EVIDENCE_RENDERER, HUMAN_PRESENTATION, LEGACY_PRESENTATION, PRESENTATION, render_agent_package, write_agent_package
 from .language import resolve_language, validate_language
 from .story_revision import load_revision
 
@@ -139,19 +139,20 @@ def run_story(session, home, destination, from_export=None, model=None, gh_host=
                            "output_sha256": file_hash(staged / (name + ".json")), "edition_sha256": file_hash(work / "edition.json")})
             agent_files = write_agent_package(article, packet, output_language, staged, staged)
             write_json(staged / "language.json", language_info)
+            write_json(staged / "human-presentation.json", HUMAN_PRESENTATION)
             write_json(staged / "tool-ledger.json", tool_ledger(packet))
             temporary_html = work / "human-spec.pending.html"
             render_story(staged, temporary_html)
             temporary_agent = work / "agent-spec.pending.md"
             temporary_agent.write_text(agent_files["agent-spec.md"], encoding="utf-8")
-            for filename in ("article.json", "article-receipt.json", "insights.json", "insights-receipt.json", "brief.json", "brief-receipt.json", "agent-rendered.md", "evidence-rendered.md", "agent-presentation.json", "language.json", "tool-ledger.json"):
+            for filename in ("article.json", "article-receipt.json", "insights.json", "insights-receipt.json", "brief.json", "brief-receipt.json", "agent-rendered.md", "evidence-rendered.md", "agent-presentation.json", "human-presentation.json", "language.json", "tool-ledger.json"):
                 shutil.copy2(staged / filename, support / filename)
             for filename in ("edition.json", "edition-receipt.json", "editorial-feedback.json", "input.json", "source.json", "evidence.jsonl", "draft-origin.json"):
                 shutil.copy2(work / filename, support / filename)
-            attempt.update(status="reviewed_draft", output_schema="story-output/v9", generation_method="markdown-files-handoff/v1", evidence_renderer="companion/v3", language=output_language, source_sha256=source["source_sha256"],
+            attempt.update(status="reviewed_draft", output_schema="story-output/v9", generation_method="markdown-files-handoff/v1", evidence_renderer=EVIDENCE_RENDERER, language=output_language, source_sha256=source["source_sha256"],
                            architecture=insights["architecture"]["decision"], human_inputs=sum(bool(event.get("human_input")) for event in packet),
                            hashes={"human-spec.html": file_hash(temporary_html), **{name: file_hash(staged / name) for name in agent_files}},
-                           support_hashes={name: file_hash(support / name) for name in ("article.json", "insights.json", "brief.json", "edition.json", "edition-receipt.json", "editorial-feedback.json", "article-receipt.json", "insights-receipt.json", "brief-receipt.json", "input.json", "source.json", "evidence.jsonl", "agent-rendered.md", "evidence-rendered.md", "agent-presentation.json", "language.json", "tool-ledger.json", "draft-origin.json")},
+                           support_hashes={name: file_hash(support / name) for name in ("article.json", "insights.json", "brief.json", "edition.json", "edition-receipt.json", "editorial-feedback.json", "article-receipt.json", "insights-receipt.json", "brief-receipt.json", "input.json", "source.json", "evidence.jsonl", "agent-rendered.md", "evidence-rendered.md", "agent-presentation.json", "human-presentation.json", "language.json", "tool-ledger.json", "draft-origin.json")},
                            limitations=["Automatic review is not proof of correctness; source-project tests were not rerun."])
             temporary_agent.replace(destination / "agent-spec.md")
             shutil.copy2(staged / "evidence.md", destination / "evidence.md")
@@ -212,10 +213,12 @@ def validate_story(directory):
             errors.append("Unknown evidence renderer policy")
     if report.get("output_schema") in {"story-output/v8", "story-output/v9"}:
         markdown_files = report["output_schema"] == "story-output/v9"
-        if report.get("evidence_renderer") not in ({"companion/v2", "companion/v3"} if markdown_files else {"companion/v1", "companion/v2"}):
+        if report.get("evidence_renderer") not in ({"companion/v2", "companion/v3", EVIDENCE_RENDERER} if markdown_files else {"companion/v1", "companion/v2"}):
             errors.append("Unknown companion evidence renderer policy")
         if markdown_files and report.get("evidence_renderer") == "companion/v3":
             trajectory_style = "handoff-portable"
+        if markdown_files and report.get("evidence_renderer") == EVIDENCE_RENDERER:
+            trajectory_style = "handoff-portable-v2"
         if markdown_files or report.get("evidence_renderer") == "companion/v2":
             policy = support / "agent-presentation.json"
             expected_policy = PRESENTATION if markdown_files else LEGACY_PRESENTATION
@@ -226,6 +229,12 @@ def validate_story(directory):
                 errors.append("Required evidence companion is missing or not hash-bound: " + filename)
             elif (root / filename).read_text(encoding="utf-8") != render_agent_package(article, packet, report["language"], trajectory_style)["evidence.md"]:
                 errors.append("Evidence companion differs from the reviewed handoff: " + filename)
+    human_policy = support / "human-presentation.json"
+    if human_policy.is_file():
+        if "human-presentation.json" not in report["support_hashes"] or json.loads(human_policy.read_bytes()) != HUMAN_PRESENTATION:
+            errors.append("Human presentation policy is missing or invalid")
+    elif report.get("evidence_renderer") == EVIDENCE_RENDERER:
+        errors.append("Human presentation policy is missing or invalid")
     if report.get("output_schema") in ("story-output/v4", "story-output/v5", "story-output/v6", "story-output/v7", "story-output/v8", "story-output/v9"):
         errors.extend(validate_agent_detail(article.get("agent_detail"), packet))
         if report["output_schema"] in ("story-output/v5", "story-output/v6") and article.get("agent_detail", {}).get("schema") != "agent-detail/v2":

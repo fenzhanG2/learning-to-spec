@@ -27,6 +27,7 @@ class ReviewFocusTests(unittest.TestCase):
         self.assertTrue(any(item["path"].endswith("/otherwise") for item in focus["handoff_conditions"]))
         self.assertTrue(any(item["path"].endswith("/reuse_condition") for item in focus["handoff_conditions"]))
         self.assertTrue(any(item["path"] == "/brief/approach/text" for item in focus["mechanism_summaries"]))
+        self.assertIn({"path": "/article/agent_markdown", "quote": draft["article"]["agent_markdown"]}, focus["mechanism_summaries"])
         self.assertTrue(any(item["path"].startswith("/insights/closing/paragraphs/") for item in focus["mechanism_summaries"]))
         self.assertTrue(any(item["path"].endswith("/recipes/0/when") for item in focus["mechanism_summaries"]))
         for item in focus["short_claims"] + focus["handoff_conditions"] + focus["mechanism_summaries"]:
@@ -50,6 +51,8 @@ class ReviewFocusTests(unittest.TestCase):
             self.assertIn("REVIEW_FOCUS (deterministic excerpts", backend.prompts[0])
             self.assertIn(json.dumps(review_focus(draft), ensure_ascii=False), backend.prompts[0])
             self.assertIn("不得在另一段自行增加", backend.prompts[0])
+            self.assertIn("取得异常对象不等于输出", backend.prompts[0])
+            self.assertIn("若被比较机制在该测试的安排下行为相同", backend.prompts[0])
             cached = FakeBackend([])
             generate_edition(root, draft, packet(), cached, validate_article)
             self.assertFalse(cached.calls)

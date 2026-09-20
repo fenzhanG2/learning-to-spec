@@ -10,6 +10,7 @@ from .privacy import excerpt, sanitize, text_of
 
 
 KEPT_TYPES = {
+    "session.start",
     "user.message", "assistant.message", "tool.execution_start",
     "tool.execution_complete", "session.task_complete", "session.compaction_complete",
     "subagent.started", "subagent.completed",
@@ -122,6 +123,8 @@ def read_session(path, home):
             if kind == "session.start":
                 metadata["context"] = sanitize(data.get("context", {}))
                 session_id = data.get("sessionId") or session_id
+                if not metadata["context"]:
+                    continue
             if kind not in KEPT_TYPES:
                 continue
             origin = origin_of(event, session_id)
@@ -136,6 +139,12 @@ def read_session(path, home):
             for source_key, record_key in (("sourceTurnId", "source_turn_id"), ("sourceContext", "source_context"), ("importMetadata", "import_metadata")):
                 if source_key in data:
                     record[record_key] = sanitize(data[source_key])
+            if kind == "session.start":
+                context = sanitize(data.get("context", {}))
+                record["text"] = text_of(context)
+                record["source_context"] = {"kind": "recorded_session_metadata", "context": context,
+                                            "retained_context": record.get("source_context"),
+                                            "authority": "Source provenance/context, not a user request or independent execution proof."}
             if kind.startswith("tool."):
                 call_id = data.get("toolCallId", "")
                 name = data.get("toolName") or tool_names.get(call_id, "unknown")

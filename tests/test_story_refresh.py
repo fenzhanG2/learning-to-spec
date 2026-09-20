@@ -6,7 +6,7 @@ import unittest
 from pathlib import Path
 
 from session_spec.agent_handoff import render_agent
-from session_spec.agent_package import LEGACY_PRESENTATION, PRESENTATION, render_agent_package
+from session_spec.agent_package import EVIDENCE_RENDERER, LEGACY_PRESENTATION, PRESENTATION, render_agent_package
 from session_spec.cli import parser
 from session_spec.pipeline import write_json
 from session_spec.storage import file_hash
@@ -110,7 +110,7 @@ class StoryRefreshTests(unittest.TestCase):
             output = self.make_story(root)
             support = output / "_support"
             report = json.loads((support / "story-report.json").read_bytes())
-            self.assertEqual(report.pop("evidence_renderer"), "companion/v3")
+            self.assertEqual(report.pop("evidence_renderer"), EVIDENCE_RENDERER)
             report["output_schema"] = "story-output/v7"
             write_json(support / "agent-presentation.json", LEGACY_PRESENTATION)
             legacy = render_agent(article(), packet(), "zh-CN", "handoff-legacy")
@@ -126,7 +126,7 @@ class StoryRefreshTests(unittest.TestCase):
             self.assertTrue(validate_story(refreshed)["valid"])
             self.assertTrue(validate_story(output)["valid"])
             current = json.loads((refreshed / "_support/story-report.json").read_bytes())
-            self.assertEqual(current["evidence_renderer"], "companion/v3")
+            self.assertEqual(current["evidence_renderer"], EVIDENCE_RENDERER)
             self.assertEqual(current["output_schema"], "story-output/v9")
             for name in ("article.json", "edition.json", "edition-receipt.json", "input.json"):
                 self.assertEqual(file_hash(support / name), file_hash(refreshed / "_support" / name))
@@ -228,3 +228,31 @@ class StoryRefreshTests(unittest.TestCase):
             report["hashes"]["human-spec.html"] = file_hash(output / "human-spec.html")
             write_json(support / "story-report.json", report)
             self.assertIn("Agent presentation policy is missing or invalid", validate_story(output)["issues"])
+
+    def test_legacy_portable_rendering_and_real_heading_remain_reproducible(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            output = self.make_story(root)
+            support = output / "_support"
+            self.assertIn("工程会话记录", (output / "human-spec.html").read_text(encoding="utf-8"))
+            self.assertNotIn("一段真实的技术工作", (output / "human-spec.html").read_text(encoding="utf-8"))
+            report = json.loads((support / "story-report.json").read_bytes())
+            report["evidence_renderer"] = "companion/v3"
+            for name, content in render_agent_package(article(), packet(), "zh-CN", "handoff-portable").items():
+                (output / name).write_text(content, encoding="utf-8")
+                rendered = "agent-rendered.md" if name == "agent-spec.md" else "evidence-rendered.md"
+                (support / rendered).write_text(content, encoding="utf-8")
+            (support / "human-presentation.json").unlink()
+            report["support_hashes"].pop("human-presentation.json")
+            render_story(support, output / "human-spec.html")
+            report["hashes"] = {name: file_hash(output / name) for name in report["hashes"]}
+            report["support_hashes"] = {name: file_hash(support / name) for name in report["support_hashes"]}
+            write_json(support / "story-report.json", report)
+            self.assertTrue(validate_story(output)["valid"])
+            self.assertIn("一段真实的技术工作", (output / "human-spec.html").read_text(encoding="utf-8"))
+            destination = root / "refreshed"
+            refresh_story(output, destination)
+            self.assertTrue(validate_story(output)["valid"])
+            self.assertTrue(validate_story(destination)["valid"])
+            self.assertNotIn("一段真实的技术工作", (destination / "human-spec.html").read_text(encoding="utf-8"))
+            self.assertEqual(file_hash(support / "edition.json"), file_hash(destination / "_support/edition.json"))
