@@ -1,4 +1,5 @@
-const access = new URLSearchParams(location.hash.slice(1)).get('access');
+const parameters = new URLSearchParams(location.hash.slice(1));
+const access = parameters.get('access');
 const elements = name => document.getElementById(name);
 const state = { job: null, review: null, choices: {}, manifest: null, plan: null, busy: false };
 function preview(html) {
@@ -44,7 +45,7 @@ async function waitJob(stage) {
     const result = await request(`/api/status?job=${state.job}`);
     if (result.status === 'error') throw new Error(result.error);
     if (result.status === 'done') return result.result;
-    status(`${stage} · Working… Keep this tab and the studio process open. Approved Copilot stages call Copilot; no historical commands are executed.`);
+    status(`${stage} · Working… Keep the Copilot host session (or manual Studio process) open. You may reopen this tab. Checkpoints survive a host restart; interrupted work is not automatically replayed.`);
     await new Promise(resolve => setTimeout(resolve, 1800));
   }
 }
@@ -53,6 +54,7 @@ function updateRemaining() {
   const remaining = state.review.findings.filter(finding => !state.choices[finding.id]?.action).length;
   elements('remaining').textContent = `${remaining} decisions remaining`;
   elements('generate').disabled = Boolean(remaining || state.busy || !elements('choices-confirmed').checked);
+  elements('save-choices').disabled = elements('generate').disabled;
   elements('publish').disabled = !state.plan || state.busy;
   elements('plan').disabled = !state.manifest || !elements('reviewed-all').checked || Boolean(document.querySelector('[data-finding]:not(:checked)')) || state.busy;
 }
@@ -130,10 +132,14 @@ action('suggestions', async () => {
   renderFindings(); status(`Applied ${applied} available suggestions without changing your decisions. Uncertain findings still need your individual choice.`);
 });
 action('change-source', async () => show('source'));
+action('save-choices', async () => {
+  const result = await request('/api/choices', { job: state.job, review_id: state.review.review_id, choices: state.choices, confirmed: elements('choices-confirmed').checked });
+  status(`${result.note} Job: ${state.job}. Return to Copilot and ask it to generate this job.`);
+});
 action('generate', async () => {
-  await request('/api/generate', { job: state.job, review_id: state.review.review_id, choices: state.choices, confirmed: elements('choices-confirmed').checked });
+  const started = await request('/api/generate', { job: state.job, review_id: state.review.review_id, choices: state.choices, confirmed: elements('choices-confirmed').checked });
   state.plan = null; state.manifest = null;
-  const result = await waitJob('Generating reduced-source documents');
+  const result = started.completed ? (await request(`/api/status?job=${state.job}`)).delivery_result : await waitJob('Generating reduced-source documents');
   await renderOutput(result);
   show('output'); status('Generated from the reduced session. Markdown is a file—not an HTML handoff page.');
 });
@@ -192,11 +198,61 @@ action('publish', async () => {
   for (const [name, url] of Object.entries(result.files || {})) { const link = node('a', name); link.href = url; link.rel = 'noreferrer noopener'; link.target = '_blank'; elements('published').append(link); }
   state.plan = null; status('Publication verified. Keep the private source and review files on your computer.');
 });
+action('verify-publish', async () => {
+  await request('/api/verify', { job: state.job });
+  const result = await waitJob('Verifying existing publication');
+  status(`Readback verification: ${result.status}. No remote write was made.`);
+});
+async function refreshJobs() {
+  const result = await request('/api/jobs');
+  elements('saved-jobs').replaceChildren(node('option', 'Choose a job…'));
+  elements('saved-jobs').firstElementChild.value = '';
+  for (const job of result.jobs) {
+    const option = node('option', `${job.id.slice(0, 10)} · ${job.stage} · ${job.status} · ${job.updated_at}`);
+    option.value = job.id; elements('saved-jobs').append(option);
+  }
+}
+async function reopenJob(identifier) {
+  if (!identifier) throw new Error('Choose a saved job first.');
+  state.job = identifier; state.plan = null; state.manifest = null;
+  elements('choices-confirmed').checked = false;
+  parameters.set('job', identifier);
+  history.replaceState(null, '', `#${parameters}`);
+  let job = await request(`/api/status?job=${identifier}`);
+  if (job.status === 'running') {
+    await waitJob(job.stage);
+    job = await request(`/api/status?job=${identifier}`);
+  }
+  if (job.status === 'error' && job.stage === 'scan') {
+    show('source'); status(job.error || 'Scan failed. Select a source and start a fresh review.', true); return;
+  }
+  state.review = await request(`/api/review?job=${identifier}`);
+  state.choices = job.approved_choices?.choices || {};
+  renderFindings();
+  elements('review-summary').textContent = `${state.review.findings.length} findings · Reopened job ${identifier}. Saved choices can be inspected below; no approval is inferred.`;
+  if (['publish', 'verify'].includes(job.stage)) {
+    if (job.delivery_result) await renderOutput(job.delivery_result);
+    show('share');
+    elements('plan-details').hidden = true;
+    status(job.error || 'Publication history restored. Verify the existing upload rather than submitting it again.', Boolean(job.error));
+    return;
+  }
+  if (job.status === 'done' && job.stage === 'generate' && job.result?.files) {
+    await renderOutput(job.result); show('output');
+    status('Reopened verified local files. No model call or upload.');
+  } else {
+    show('review'); status(job.error || 'Review your saved choices before continuing.', Boolean(job.error));
+  }
+}
+action('refresh-jobs', refreshJobs);
+action('resume-job', async () => reopenJob(elements('saved-jobs').value));
 (async () => {
   try {
     if (!access) throw new Error('Open the complete private URL printed by the studio command. The access fragment is required.');
     const result = await request('/api/sessions');
-    for (const session of result.sessions) { const option = node('option', `${session.title} · ${Math.round(session.bytes/1024)} KB`); option.value = session.id; option.selected = session.id === 'selected'; elements('session').append(option); }
+    for (const session of result.sessions) { const option = node('option', `${session.title} · ${Math.round(session.bytes/1024)} KB`); option.value = session.id; option.selected = session.id === 'selected' || session.id === parameters.get('session'); elements('session').append(option); }
+    await refreshJobs();
+    if (parameters.get('job')) { await reopenJob(parameters.get('job')); return; }
     if (result.resume_job) {
       state.job = result.resume_job;
       state.review = await request(`/api/review?job=${state.job}`);

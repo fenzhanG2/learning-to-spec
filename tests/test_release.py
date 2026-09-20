@@ -39,6 +39,13 @@ class ReleaseTests(unittest.TestCase):
                 archive.extractall(root / 'installed')
             plugin = root / 'installed/plugins/learning-to-spec'
             self.assertFalse((plugin / 'node_modules').exists())
+            self.assertTrue((plugin / 'mcp.json').is_file())
+            self.assertTrue((plugin / '.mcp.json').is_file())
+            protocol = subprocess.run([sys.executable, str(plugin / 'scripts/plugin_mcp.py')],
+                input='{"jsonrpc":"2.0","id":1,"method":"initialize"}\n{"jsonrpc":"2.0","id":2,"method":"tools/list"}\n',
+                cwd=root, capture_output=True, text=True, encoding='utf-8', timeout=30)
+            self.assertEqual(protocol.returncode, 0, protocol.stderr)
+            self.assertEqual(len(json.loads(protocol.stdout.splitlines()[1])['result']['tools']), 12)
             notices = (plugin / 'third_party/rendering-dependencies.txt').read_text(encoding='utf-8')
             for dependency in ('markdown-it@', 'lucide@', '@dagrejs/dagre@', '@dagrejs/graphlib@'):
                 self.assertIn(dependency, notices)

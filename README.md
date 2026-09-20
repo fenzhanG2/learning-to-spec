@@ -2,6 +2,8 @@
 
 Turn a GitHub Copilot session into a readable engineering story, an actionable Agent handoff, or both — with explicit privacy and delivery choices.
 
+**A native workflow plugin, not only a skill:** 12 typed MCP tools, persistent local jobs, a private approval UI, source-grounded generation/review, selected-file delivery and verified ArtifactStore publishing. The skill only guides conversation. [Architecture and recovery](docs/native-runtime.md).
+
 ## Choose before generating
 
 The plugin asks you to choose, rather than treating defaults as permission:
@@ -42,7 +44,7 @@ Ask me which readers, privacy transformations and delivery I want.
 
 You can supply a session UUID or an absolute `events.jsonl` path instead of a topic. The plugin lists local candidates if needed; it must not guess which session you meant. It then asks for Human / Agent / Both, local files / ArtifactStore, and local / contextual privacy detection. Inspect individual findings and confirm the changes before generation. Choosing local files does not disable Copilot model calls or quota usage.
 
-Open the private Studio URL the plugin provides, keep its process running, and complete the review. Download only the selected deliverables or their ZIP. Human output is `human-spec.html`; Agent output is `agent-spec.md` plus `evidence.md`. Keep the Markdown files together so evidence links resolve. Do not share the private working folder or Studio access URL.
+The native `open_studio` tool opens a private browser without returning its capability to the model. Complete individual privacy choices there. Generate in the UI, or save choices and ask Copilot to call `generate`. Keep the interactive Copilot host session open during work: hosts may terminate plugin processes on exit. Saved jobs/checkpoints survive restarts; `list_jobs` and the saved-job picker reopen them without automatic replay. Batch generation waits for completion. Download only selected files/ZIP: `human-spec.html`, `agent-spec.md`, `evidence.md`. Keep Markdown files together so citations resolve. Never share the private workspace or Studio capability.
 
 ### 3. Update or troubleshoot
 
@@ -52,7 +54,7 @@ copilot plugin update learning-to-spec@learning-to-spec
 
 Restart your Copilot session after installing or updating. If CLI lists the plugin but the running App still reports `Skill not found`, do not assume it loaded: retry after restarting the App when other active work can safely stop. A new conversation or switching Customize tabs may not refresh the App's plugin registry. Autopilot mode may report that the user is unavailable to answer; use Interactive mode for native questions, or the Studio's explicit-choice UI.
 
-Ask the skill to run its bundled `scripts/doctor.py` if prerequisites or rendering fail; run it from the installed plugin root, not an unrelated working directory. It checks Python, Node version, CLI availability and renderer integrity without model calls. Authentication is checked during generation. No npm install or manual clone is required. On systems where Python is named `python3`, use that command in place of `python`.
+Ask Copilot to call `health`. A visible skill without native tools is not a successful full-plugin installation. If prerequisites fail, bundled `scripts/doctor.py` checks Python, Node, CLI and renderer integrity without model calls. Authentication is checked during generation. No npm/manual clone is required. Use `python3` if that is your installed Python command.
 
 Copilot App and CLI share the plugin/skill format. Native App plugin recognition and the explicit-choice gate have been tested separately from CLI generation; this is not a claim that every App version or policy configuration behaves identically. ArtifactStore requires separate, authorized Microsoft Azure CLI access; a personal GitHub account alone does not grant it. Local export does not need Azure.
 
