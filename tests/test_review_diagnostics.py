@@ -6,10 +6,26 @@ from pathlib import Path
 from session_spec.backend import ModelResponseError
 from session_spec.model_io import generate_json
 from session_spec.language import source_script_issues
-from session_spec.story_grounding import field_has_quote, quote_diagnostic, resolve_review_locations, validate_grounding
+from session_spec.story_grounding import contract_diagnostic, field_has_quote, quote_diagnostic, resolve_review_locations, validate_grounding
 
 
 class ReviewDiagnosticsTests(unittest.TestCase):
+    def test_missing_contract_field_gets_the_literal_category_rule_without_auto_acceptance(self):
+        contract = "### data_minimization：范围\n- 隐私裁剪不是故事情节。\n\n### mechanism: scope\n- Keep the invariant."
+        issue = {"kind": "contract", "category": "data_minimization", "path": "/article/outcome", "quote": "A private aside existed.", "evidence": []}
+        edition = {"article": {"outcome": issue["quote"]}}
+        error = validate_grounding({"issues": [issue]}, edition, [], contract)[0]
+        self.assertIn("contract_quote is missing or not literal", error)
+        self.assertIn("隐私裁剪不是故事情节。", error)
+        self.assertNotIn("Keep the invariant", error)
+        self.assertNotIn("contract_quote", issue)
+        resolved, changes = resolve_review_locations({"issues": [issue]}, edition, [], contract)
+        self.assertEqual(changes, [])
+        self.assertTrue(validate_grounding(resolved, edition, [], contract))
+        issue["contract_quote"] = "隐私裁剪不是故事情节。"
+        self.assertEqual(validate_grounding({"issues": [issue]}, edition, [], contract), [])
+        self.assertNotIn("Supplied category rule", contract_diagnostic({"category": "unknown"}, contract))
+
     def test_contract_typographic_quotes_recover_only_a_unique_literal_rule(self):
         edition = {"article": {"outcome": "partial"}}
         contract = 'An explicitly excluded “deployment” is not an incomplete local task.'

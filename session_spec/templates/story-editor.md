@@ -81,6 +81,7 @@ issues 只放会误导需求、事实、机制、接续或违反必需交付约�
 - kind=source_fact：事实/机制错误需引用原始事件的实际语句。evidence 每项为 ref/quote/origin，origin 只可 human/tool/assistant/context/metadata，并与该事件真实来源一致；metadata 只引用 timestamp/source_turn_id/import_metadata 中的元数据，不是用户原话。quote 必须逐字存在，不加省略号拼接。工具请求与结果按 tool_call_id 配对核查，不能拿相邻事件编号替代内容核对。
 - kind=contract：缺失必要阅读职责或不符合发布约定，contract_quote 必须逐字来自本提示或 OVERVIEW_CONTRACT，不得臆造“人读不能有下次做法”等规则。
 - 纯契约问题的 evidence=[]，依据放 contract_quote；契约不是历史事件，严禁构造 PROMPT_CONTRACT_1 等假 ref。工具来源优先引用 10–120 字符的连续单行原文，保留 diff 前缀和空格，不拼接多行当引文。指出一份足以检索的证据文件不代表声称其他附件不存在，不能仅因没逐个枚举附件而阻断发布。
+- kind=contract 的字段 contract_quote 不可省略，也不能用历史 evidence 代替。例：{"kind":"contract","category":"data_minimization","contract_quote":"隐私裁剪不是故事情节。","evidence":[]}；再补齐真实 path/quote/severity/reason。contract_quote 保留所引契约原文的语言，不随正文语言翻译。格式纠正时应补上缺失字段，而不是只改 reason 后返回同一无效意见。
 
 原文定位证明的是引用和来源有效，不是逻辑结论已正确；仍须核对推断是否成立。没有可靠依据的怀疑放 suggestions，不能当成必须改写事实的裁决。已明确归因且范围准确的概括不需要为了文风反复加免责声明。
 

@@ -137,6 +137,29 @@ class MinimizationReviewTests(unittest.TestCase):
             generate_edition(root, draft, events, rechecked, validate_article, language="auto")
             self.assertEqual(len(rechecked.calls), 1)
 
+    def test_missing_contract_quote_uses_existing_bounded_retry_before_any_patch(self):
+        events, private, operations = mixed_source()
+        draft = {"article": article(), "brief": brief(), "insights": insights()}
+        path = "/article/chapters/0/markdown"
+        residue = "A private aside was omitted."
+        draft["article"]["chapters"][0]["markdown"] += " " + residue
+        issue = {"path": path, "quote": residue, "kind": "contract", "category": "data_minimization", "evidence": [], "reason": "Unnecessary private metadata."}
+        invalid = edition_review([issue])
+        invalid["minimization"] = [decision("needs_fix", [{"path": path, "quote": residue}])]
+        corrected = copy.deepcopy(invalid)
+        corrected["issues"][0]["contract_quote"] = "隐私裁剪不是故事情节。"
+        clean = edition_review()
+        clean["minimization"] = [decision()]
+        patch = {"patches": [{"op": "replace", "path": path, "value": "任务调用包装器。"}]}
+        with tempfile.TemporaryDirectory() as temporary:
+            backend = FakeBackend([invalid, corrected, patch, clean])
+            actual = generate_edition(Path(temporary), draft, events, backend, validate_article)
+            self.assertNotIn(residue, actual["article"]["chapters"][0]["markdown"])
+            self.assertEqual([call["label"] for call in backend.calls], ["story-edition-review", "story-edition-review-grounding-retry", "story-edition-patch", "story-edition-review"])
+            self.assertIn("Supplied category rule for navigation", backend.prompts[1])
+            self.assertIn("contract_quote is missing or not literal", backend.prompts[1])
+            self.assertNotIn(private, "\n".join(backend.prompts))
+
 
 if __name__ == "__main__":
     unittest.main()

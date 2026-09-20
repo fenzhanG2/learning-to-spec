@@ -33,6 +33,19 @@ def quote_diagnostic(field, quote):
             "An empty array/object may be quoted exactly as []/{} at its actual path when identifying an omission.")
 
 
+def contract_diagnostic(issue, contract):
+    category = issue.get("category")
+    hint = ""
+    if isinstance(category, str):
+        section = re.search(r"^###\s+" + re.escape(category) + r"[：:][^\n]*\n+([^\n]+)", contract, re.MULTILINE)
+        if section:
+            hint = " Supplied category rule for navigation, not automatic approval: " + repr(section.group(1)[:900]) + "."
+    return ("contract_quote is missing or not literal. Add/correct this finding's contract_quote field with a short exact span "
+            "from the supplied publishing contract; preserve its original language. Source refs/evidence do NOT replace "
+            "contract_quote for kind=contract. Use evidence=[] for a purely publishing-contract finding; never invent a contract ref."
+            + hint)
+
+
 def pointer_value(document, pointer):
     if not isinstance(pointer, str) or not pointer.startswith("/"):
         raise ValueError("A finding must point into the actual edition")
@@ -201,7 +214,7 @@ def validate_grounding(review, edition, events, contract):
         if kind == "contract":
             rule = issue.get("contract_quote")
             if not isinstance(rule, str) or not rule or rule not in contract:
-                errors.append(prefix + "contract_quote must literally exist in the supplied publishing contract; do not invent editorial rules")
+                errors.append(prefix + contract_diagnostic(issue, contract))
         elif not anchors:
             errors.append(prefix + "a factual/intent finding requires source quotations")
         human_support = False
