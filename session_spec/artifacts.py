@@ -13,7 +13,7 @@ import zipfile
 from pathlib import Path
 
 from .reduction import digest
-from .share_package import package_bytes
+from .share_package import package_bytes, package_preview
 from .storage import write_json
 
 
@@ -138,10 +138,10 @@ class ArtifactClient:
         return self.request("POST", f"/api/sites/{site}/upload", b"".join(parts), "multipart/form-data; boundary=" + boundary)
 
 
-def destination_plan(directory, site, client):
+def destination_plan(directory, site, client, *, preview=False):
     if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]{0,99}", site):
         raise ValueError("Site name must start with a letter/number and contain only letters, numbers, underscores or hyphens")
-    manifest, archive = package_bytes(directory)
+    manifest, archive = package_preview(directory) if preview else package_bytes(directory)
     audience = manifest["audience"]
     team = audience[5:] if audience.startswith("team:") else None
     try:

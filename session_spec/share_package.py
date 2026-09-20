@@ -86,15 +86,16 @@ def load_package(directory):
     return manifest
 
 
-def approve_package(directory, package_id, acknowledged_findings, reviewed_all_files=False):
+def approve_package(directory, package_id, acknowledged_findings, reviewed_all_files=False, *, confirmed_publish=False):
     directory = Path(directory).resolve()
     manifest = load_package(directory)
-    if package_id != manifest["package_id"] or not reviewed_all_files:
-        raise ValueError("Explicit review of the current Human, Agent and included evidence files is required")
+    if package_id != manifest["package_id"] or not (reviewed_all_files is True or confirmed_publish is True):
+        raise ValueError("Explicit approval of the current selected files is required")
     if set(acknowledged_findings) != {finding["id"] for finding in manifest["findings"]}:
         raise ValueError("Every final disclosure finding needs explicit acknowledgement; edit the privacy choices and regenerate to remove it")
     approval = {"schema": "share-approval/v1", "package_id": package_id, "audience": manifest["audience"],
-                "reviewed_all_files": True, "acknowledged_findings": sorted(acknowledged_findings)}
+                "reviewed_all_files": reviewed_all_files is True, "confirmed_publish": confirmed_publish is True,
+                "acknowledged_findings": sorted(acknowledged_findings)}
     write_json(directory / "approval.json", approval)
     return approval
 
@@ -103,8 +104,18 @@ def package_bytes(directory):
     directory = Path(directory).resolve()
     manifest = load_package(directory)
     approval = json.loads((directory / "approval.json").read_bytes())
-    if approval.get("package_id") != manifest["package_id"] or approval.get("audience") != manifest["audience"] or approval.get("reviewed_all_files") is not True or set(approval.get("acknowledged_findings", [])) != {finding["id"] for finding in manifest["findings"]}:
+    if approval.get("package_id") != manifest["package_id"] or approval.get("audience") != manifest["audience"] or not (approval.get("reviewed_all_files") is True or approval.get("confirmed_publish") is True) or set(approval.get("acknowledged_findings", [])) != {finding["id"] for finding in manifest["findings"]}:
         raise ValueError("Current package lacks final privacy approval")
+    return _archive(directory, manifest)
+
+
+def package_preview(directory):
+    directory = Path(directory).resolve()
+    manifest = load_package(directory)
+    return _archive(directory, manifest)
+
+
+def _archive(directory, manifest):
     stream = io.BytesIO()
     with zipfile.ZipFile(stream, "w", compression=zipfile.ZIP_DEFLATED) as archive:
         for filename in sorted(manifest["files"]):

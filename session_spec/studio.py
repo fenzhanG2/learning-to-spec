@@ -67,6 +67,7 @@ class Studio:
             identifier = uuid.uuid4().hex
             self.jobs[identifier] = {"id": identifier, "directory": review_directory.parent, "review_directory": review_directory,
                                      "generation": generation, "decision_id": digest(decisions), "status": "done", "stage": "generate",
+                                     "approved_choices": decisions,
                                      "result": {"output": str(generation / "deliverables"), "files": filenames(selection["readers"]), "preferences": selection}}
             self.resume_job = identifier
             self.resume_choices = decisions["choices"]
@@ -210,7 +211,7 @@ class Studio:
                 raise ValueError("Prepare a current package first")
             return approve_package(job["package"], data.get("package_id"), data.get("acknowledged", []), data.get("reviewed_all_files") is True)
         if path == "/api/plan":
-            plan = destination_plan(job["package"], data.get("site", ""), ArtifactClient())
+            plan = destination_plan(job["package"], data.get("site", ""), ArtifactClient(), preview=True)
             job["plan"] = plan
             return plan
         if path == "/api/verify":
@@ -223,6 +224,10 @@ class Studio:
                 raise ValueError("Review a destination plan before publishing")
             if (job["package"] / "publication.json").exists():
                 raise ValueError("Publication already attempted; verify this artifact instead of retrying the write")
+            if data.get("confirm") != job["plan"].get("plan_id"):
+                raise ValueError("Destination changed; inspect the current destination before uploading")
+            if data.get("publish_intent") is True:
+                approve_package(job["package"], data.get("package_id"), data.get("acknowledged", []), confirmed_publish=True)
             return self.background(job, "publish", lambda: publish_package(job["package"], job["plan"], data.get("confirm"), ArtifactClient()))
         raise ValueError("Unknown studio action")
 
@@ -276,7 +281,11 @@ def handler_for(studio):
                     return
                 job = studio.job(query.get("job", [None])[0])
                 if parsed.path == "/api/status":
-                    self.send(200, {key: value for key, value in job.items() if key not in {"directory", "review_directory", "generation", "package", "plan"}})
+                    result = {key: value for key, value in job.items() if key not in {"directory", "review_directory", "generation", "package", "plan"}}
+                    result["publication_attempted"] = "package" in job and (job["package"] / "publication.json").exists()
+                    if "delivery_result" not in result and job["stage"] == "generate" and job["status"] == "done":
+                        result["delivery_result"] = job.get("result")
+                    self.send(200, result)
                 elif parsed.path == "/api/review":
                     review, baseline = load_review(job.get("review_directory", job["directory"] / "review"))
                     slots = {f"S{number}": (path, text) for number, (path, text) in enumerate(strings(baseline), 1)}
