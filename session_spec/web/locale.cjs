@@ -7,7 +7,7 @@ const english = {
   '故事路线': 'Story route', '这次留下了什么': 'What this session produced', '文档入口': 'Documents',
   '两篇故事': 'Stories', '想核对结论？展开本次验证的范围': 'Check the evidence and the scope of validation',
   '本次验证范围': 'Validation scope', '要回答的问题': 'Question', '实际看到的': 'Observed', '还不能据此断言': 'Not established',
-  '这里只汇总会话中已有的观察，不代表今天重新执行过这些检查。完整依据随交接文档保存在 _support 目录。': 'These observations come from the historical session; the checks were not rerun today. Supporting evidence is in _support.',
+  '这里只汇总会话中已有的观察，不代表为这份文档重新执行过这些检查。': 'These observations were recorded in the session; the checks were not rerun for this document.',
   '继续阅读': 'Continue reading', '查看／复制 Agent 交接版': 'View / copy Agent handoff',
   '独立交接文件': 'Companion files:',
   '本文记录这段会话的工作与判断。接续建议不是已完成的操作，历史操作也不是新的执行授权。': 'This document records the session’s work and decisions. Suggested next steps are not completed work, and historical actions are not fresh authorization.',
