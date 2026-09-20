@@ -29,11 +29,13 @@ jobs:
         with:
           node-version: ${{ matrix.node }}
       - name: Test installed-user bundle without node_modules
-        run: python -X utf8 -m unittest discover -s tests -v
+        run: python -X utf8 -m unittest discover -s tests -p test_release.py -v
       - name: Verify browser script syntax
         run: node --check session_spec/web/studio.js
       - name: Install build-only dependencies
         run: npm ci --ignore-scripts --registry=https://registry.npmjs.org
+      - name: Test source modules with their build dependencies
+        run: python -X utf8 -m unittest discover -s tests -v
       - name: Verify reproducible renderer
         run: |
           npm run build
