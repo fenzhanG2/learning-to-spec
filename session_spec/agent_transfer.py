@@ -148,7 +148,8 @@ def decision_phase(phase, ledger, label):
 
 
 def render_transfer(article, events, ledger, language, trajectory_style="decisions"):
-    separate = trajectory_style == "handoff-split"
+    portable = trajectory_style == "handoff-portable"
+    separate = trajectory_style in {"handoff-split", "handoff-portable"}
     if separate:
         trajectory_style = "handoff"
     legacy_roles = trajectory_style == "handoff-legacy"
@@ -158,7 +159,7 @@ def render_transfer(article, events, ledger, language, trajectory_style="decisio
         raise ValueError("Unknown trajectory rendering style")
     detail = article["agent_detail"]
     label = lambda english, chinese: chinese if language.startswith("zh") else english
-    evidence_index = EvidenceIndex(events, ledger, language, legacy_roles=legacy_roles) if trajectory_style == "handoff" else None
+    evidence_index = EvidenceIndex(events, ledger, language, legacy_roles=legacy_roles, portable=portable) if trajectory_style == "handoff" else None
     cite = evidence_index.cite if evidence_index else lambda refs: ", ".join(refs)
     sources_label = label("Selected evidence: ", "关键来源：") if evidence_index else label("Sources: ", "来源：")
     resume = detail["resume"]
@@ -246,7 +247,11 @@ def render_transfer(article, events, ledger, language, trajectory_style="decisio
         lines.extend(["### " + path["title"] + " [" + path["outcome"] + "]", "", path["reason"], "",
                       label("Reuse / avoid / recheck: ", "复用／避免／重查：") + path["reuse_condition"], "",
                       " → ".join(path["phase_ids"]) + "; " + cite(path["refs"]), ""])
-    if separate:
+    if portable:
+        lines.extend(["## " + label("Evidence and transfer", "证据与交付"), "",
+                      label("Start with this handoff; it contains the working state, next actions, decision trajectory and reusable methods. Keep `agent-spec.md` and [evidence.md](evidence.md) together; the companion is optional source lookup. Private export internals are not delivered and are not required to continue. Check the current workspace before acting: historical paths, commands and approvals are not portable defaults or new authority.",
+                            "先读本交接文档，工作状态、下一步、决策轨迹和复用方法均在正文。将 `agent-spec.md` 与 [evidence.md](evidence.md) 放在同一目录；附件仅供按需回查。私有导出内部材料不随包交付，也不是继续工作所必需的。操作前核对当前工作区：历史路径、命令和批准不是可直接迁移的默认值或新的授权。"), ""])
+    elif separate:
         lines.extend(["## " + label("Evidence and transfer", "证据与交付"), "",
                       label("Start with this handoff; it contains the working state, next actions, decision trajectory and reusable methods. Transfer `agent-spec.md` with [evidence.md](evidence.md) in the same directory for optional source lookup. Exact payloads and provenance are in `_support/`; they are not required first reading. Historical machine paths and approvals are not portable defaults or new authority.",
                             "先读本交接文档，工作状态、下一步、决策轨迹和复用方法均在正文。交付时把 `agent-spec.md` 与 [evidence.md](evidence.md) 放在同一目录，按需查来源。精确载荷与来源元数据保留在 `_support/`，不是接手前置阅读。历史机器路径和批准不是可直接迁移的默认值或新授权。"), ""])

@@ -146,7 +146,7 @@ def run_story(session, home, destination, from_export=None, model=None, gh_host=
                 shutil.copy2(staged / filename, support / filename)
             for filename in ("edition.json", "edition-receipt.json", "editorial-feedback.json", "input.json", "source.json", "evidence.jsonl", "draft-origin.json"):
                 shutil.copy2(work / filename, support / filename)
-            attempt.update(status="reviewed_draft", output_schema="story-output/v9", generation_method="markdown-files-handoff/v1", evidence_renderer="companion/v2", language=output_language, source_sha256=source["source_sha256"],
+            attempt.update(status="reviewed_draft", output_schema="story-output/v9", generation_method="markdown-files-handoff/v1", evidence_renderer="companion/v3", language=output_language, source_sha256=source["source_sha256"],
                            architecture=insights["architecture"]["decision"], human_inputs=sum(bool(event.get("human_input")) for event in packet),
                            hashes={"human-spec.html": file_hash(temporary_html), **{name: file_hash(staged / name) for name in agent_files}},
                            support_hashes={name: file_hash(support / name) for name in ("article.json", "insights.json", "brief.json", "edition.json", "edition-receipt.json", "editorial-feedback.json", "article-receipt.json", "insights-receipt.json", "brief-receipt.json", "input.json", "source.json", "evidence.jsonl", "agent-rendered.md", "evidence-rendered.md", "agent-presentation.json", "language.json", "tool-ledger.json", "draft-origin.json")},
@@ -210,8 +210,10 @@ def validate_story(directory):
             errors.append("Unknown evidence renderer policy")
     if report.get("output_schema") in {"story-output/v8", "story-output/v9"}:
         markdown_files = report["output_schema"] == "story-output/v9"
-        if report.get("evidence_renderer") not in ({"companion/v2"} if markdown_files else {"companion/v1", "companion/v2"}):
+        if report.get("evidence_renderer") not in ({"companion/v2", "companion/v3"} if markdown_files else {"companion/v1", "companion/v2"}):
             errors.append("Unknown companion evidence renderer policy")
+        if markdown_files and report.get("evidence_renderer") == "companion/v3":
+            trajectory_style = "handoff-portable"
         if markdown_files or report.get("evidence_renderer") == "companion/v2":
             policy = support / "agent-presentation.json"
             expected_policy = PRESENTATION if markdown_files else LEGACY_PRESENTATION

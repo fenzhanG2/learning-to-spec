@@ -12,6 +12,28 @@ from test_story_pipeline import article, brief, insights, packet
 
 
 class AgentEvidenceTests(unittest.TestCase):
+    def test_portable_companion_does_not_require_private_export_files(self):
+        for language in ("en", "zh-CN"):
+            with self.subTest(language=language):
+                files = render_agent_package(article(), packet(), language)
+                self.assertNotIn("_support/", files["evidence.md"])
+                footer = files["agent-spec.md"].rsplit("## ", 1)[-1]
+                self.assertNotIn("_support/", footer)
+                if language == "en":
+                    self.assertIn("not included in this package", files["evidence.md"])
+                    self.assertIn("assess acceptance against the task's stated scope", files["evidence.md"])
+                    self.assertNotIn("not task acceptance", files["evidence.md"])
+                    self.assertIn("Private export internals are not delivered", footer)
+                else:
+                    self.assertIn("不包含在交付包中", files["evidence.md"])
+                    self.assertIn("本任务明确约定的范围", files["evidence.md"])
+
+    def test_legacy_split_companion_preserves_its_exact_boundary_wording(self):
+        files = render_agent_package(article(), packet(), "en", "handoff-split")
+        self.assertIn("Recorded output; not task acceptance.", files["evidence.md"])
+        self.assertIn("_support/evidence.jsonl", files["evidence.md"])
+        self.assertIn("Exact payloads and provenance are in `_support/`", files["agent-spec.md"])
+
     def test_handoff_has_tool_target_and_explained_local_citations(self):
         files = render_agent_package(article(), packet(), "en")
         output = files["agent-spec.md"]

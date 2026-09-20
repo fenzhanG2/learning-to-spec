@@ -6,7 +6,7 @@ import unittest
 from pathlib import Path
 
 from session_spec.agent_handoff import render_agent
-from session_spec.agent_package import LEGACY_PRESENTATION, PRESENTATION
+from session_spec.agent_package import LEGACY_PRESENTATION, PRESENTATION, render_agent_package
 from session_spec.cli import parser
 from session_spec.pipeline import write_json
 from session_spec.storage import file_hash
@@ -17,6 +17,12 @@ from test_story_pipeline import FakeBackend, article, brief, edition_review, ins
 
 @unittest.skipUnless(shutil.which("node"), "Node.js required for HTML rendering")
 class StoryRefreshTests(unittest.TestCase):
+    def legacy_companion_files(self, output):
+        for name, content in render_agent_package(article(), packet(), "zh-CN", "handoff-split").items():
+            (output / name).write_text(content, encoding="utf-8")
+            rendered = "agent-rendered.md" if name == "agent-spec.md" else "evidence-rendered.md"
+            (output / "_support" / rendered).write_text(content, encoding="utf-8")
+
     def make_story(self, root):
         source = root / "source/events.jsonl"
         source.parent.mkdir()
@@ -104,7 +110,7 @@ class StoryRefreshTests(unittest.TestCase):
             output = self.make_story(root)
             support = output / "_support"
             report = json.loads((support / "story-report.json").read_bytes())
-            self.assertEqual(report.pop("evidence_renderer"), "companion/v2")
+            self.assertEqual(report.pop("evidence_renderer"), "companion/v3")
             report["output_schema"] = "story-output/v7"
             write_json(support / "agent-presentation.json", LEGACY_PRESENTATION)
             legacy = render_agent(article(), packet(), "zh-CN", "handoff-legacy")
@@ -120,7 +126,7 @@ class StoryRefreshTests(unittest.TestCase):
             self.assertTrue(validate_story(refreshed)["valid"])
             self.assertTrue(validate_story(output)["valid"])
             current = json.loads((refreshed / "_support/story-report.json").read_bytes())
-            self.assertEqual(current["evidence_renderer"], "companion/v2")
+            self.assertEqual(current["evidence_renderer"], "companion/v3")
             self.assertEqual(current["output_schema"], "story-output/v9")
             for name in ("article.json", "edition.json", "edition-receipt.json", "input.json"):
                 self.assertEqual(file_hash(support / name), file_hash(refreshed / "_support" / name))
@@ -162,6 +168,7 @@ class StoryRefreshTests(unittest.TestCase):
                 support = output / "_support"
                 report = json.loads((support / "story-report.json").read_bytes())
                 report.update(output_schema="story-output/v8", evidence_renderer="companion/v2" if policy else "companion/v1")
+                self.legacy_companion_files(output)
                 if policy:
                     write_json(support / "agent-presentation.json", policy)
                 else:
@@ -177,14 +184,38 @@ class StoryRefreshTests(unittest.TestCase):
                 self.assertEqual(refresh_story(output, refreshed)["model_calls"], 0)
                 self.assertTrue(validate_story(refreshed)["valid"])
                 self.assertTrue(validate_story(output)["valid"])
-                for name in ("agent-spec.md", "evidence.md", "_support/edition.json", "_support/edition-receipt.json", "_support/input.json"):
+                for name in ("_support/edition.json", "_support/edition-receipt.json", "_support/input.json"):
                     self.assertEqual(file_hash(output / name), file_hash(refreshed / name))
+                for name in ("agent-spec.md", "evidence.md"):
+                    self.assertNotEqual(file_hash(output / name), file_hash(refreshed / name))
                 self.assertEqual(json.loads((refreshed / "_support/agent-presentation.json").read_bytes()), PRESENTATION)
                 self.assertNotIn('<dialog', (refreshed / "human-spec.html").read_text(encoding="utf-8"))
                 again = root / "again"
                 refresh_story(refreshed, again)
                 for name in ("human-spec.html", "agent-spec.md", "evidence.md"):
                     self.assertEqual(file_hash(refreshed / name), file_hash(again / name))
+
+    def test_v9_legacy_companion_validates_and_refreshes_without_new_model_review(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            output = self.make_story(root)
+            support = output / "_support"
+            report = json.loads((support / "story-report.json").read_bytes())
+            report["evidence_renderer"] = "companion/v2"
+            self.legacy_companion_files(output)
+            report["hashes"] = {name: file_hash(output / name) for name in report["hashes"]}
+            report["support_hashes"] = {name: file_hash(support / name) for name in report["support_hashes"]}
+            write_json(support / "story-report.json", report)
+            self.assertTrue(validate_story(output)["valid"])
+            refreshed = root / "refreshed"
+            self.assertEqual(refresh_story(output, refreshed)["model_calls"], 0)
+            self.assertTrue(validate_story(output)["valid"])
+            self.assertTrue(validate_story(refreshed)["valid"])
+            self.assertEqual(file_hash(support / "edition.json"), file_hash(refreshed / "_support/edition.json"))
+            self.assertNotIn("_support/", (refreshed / "evidence.md").read_text(encoding="utf-8"))
+            report["evidence_renderer"] = "companion/unknown"
+            write_json(support / "story-report.json", report)
+            self.assertIn("Unknown companion evidence renderer policy", validate_story(output)["issues"])
 
     def test_markdown_only_policy_cannot_silently_reenable_preview(self):
         with tempfile.TemporaryDirectory() as temporary:

@@ -57,7 +57,7 @@ def refresh_story(directory, destination):
                       "hashes": {name: file_hash(staged / name) for name in ("human-spec.html", *agent_files)},
                       "support_hashes": {path.name: file_hash(path) for path in staged_support.iterdir() if path.is_file()}}
             if article.get("agent_detail", {}).get("schema") == "agent-detail/v3":
-                report.update(output_schema="story-output/v9", generation_method="markdown-files-render/v1", evidence_renderer="companion/v2")
+                report.update(output_schema="story-output/v9", generation_method="markdown-files-render/v1", evidence_renderer="companion/v3")
             write_json(staged_support / "story-report.json", report)
             validation = validate_story(staged)
             if not validation["valid"]:
