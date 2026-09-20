@@ -19,6 +19,7 @@ from session_spec.story_insights import generate_insights, validate_insights
 from session_spec.story_grounding import complete_reference_pairs, resolve_review_locations, validate_grounding
 from session_spec.story_pipeline import reviewed_article, run_story, validate_article, validate_story
 from session_spec.agent_handoff import render_agent
+from session_spec.transfer_probe import CHECKS as PROBE_CHECKS
 
 
 def packet():
@@ -109,6 +110,12 @@ class FakeBackend:
         if isinstance(response, Exception):
             raise response
         return copy.deepcopy(response)
+
+
+def transfer_review(findings=None):
+    return {"schema": "transfer-probe/v1", "findings": findings or [],
+            "checked": [{"category": category, "note": "Checked the supplied pair, without executing it."} for category in PROBE_CHECKS],
+            "summary": "Scripted reader response for offline pipeline tests."}
 
 
 class StorySchemaTests(unittest.TestCase):
@@ -707,9 +714,9 @@ class StoryPipelineTests(unittest.TestCase):
             write_json(export / "spec.json", {"spec": {"old_error": "STALE_CANONICAL_CLAIM"}})
             output = root / "output"
             draft = {"article": article(), "insights": insights(), "brief": brief()}
-            backend = FakeBackend([draft, edition_review()])
+            backend = FakeBackend([draft, transfer_review(), edition_review()])
             result = run_story(None, root / "copilot", output, from_export=export, backend_factory=lambda **options: backend)
-            self.assertEqual(result["model_calls"], 2)
+            self.assertEqual(result["model_calls"], 3)
             for prompt in backend.prompts:
                 self.assertIn("SOURCE_LANGUAGE_POLICY", prompt)
                 self.assertNotIn("The output language is", prompt)
@@ -747,10 +754,10 @@ class StoryPipelineTests(unittest.TestCase):
             write_json(feedback_path, {"source_sha256": source_hash, "issues": [{"reason": "Recheck the observed limit", "refs": ["E000001"]}]})
             feedback_review = edition_review()
             feedback_review["feedback_resolution"] = [{"index": 0, "status": "not_applicable", "note": "Current statement already distinguishes observation and acceptance"}]
-            reviewed_feedback = FakeBackend([feedback_review])
+            reviewed_feedback = FakeBackend([transfer_review(), feedback_review])
             run_story(None, root / "copilot", output, from_export=export, resume=True,
                       editorial_feedback=feedback_path, backend_factory=lambda **options: reviewed_feedback)
-            self.assertEqual(len(reviewed_feedback.calls), 1)
+            self.assertEqual(len(reviewed_feedback.calls), 2)
             self.assertTrue(validate_story(output)["valid"])
             retained = FakeBackend([])
             run_story(None, root / "copilot", output, from_export=export, resume=True, backend_factory=lambda **options: retained)
@@ -769,7 +776,7 @@ class StoryPipelineTests(unittest.TestCase):
                 run_story(None, root / "copilot", output, from_export=export, resume=True, model="different", backend_factory=lambda **options: failing)
             self.assertTrue(validate_story(output)["valid"])
             self.assertEqual((output / "human-spec.html").read_text(encoding="utf-8"), html)
-            failing_brief = FakeBackend([{"issues": "malformed"}])
+            failing_brief = FakeBackend([{"issues": "malformed"}, {"issues": "malformed"}])
             with self.assertRaises(ValueError):
                 run_story(None, root / "copilot", output, from_export=export, resume=True, model="different", backend_factory=lambda **options: failing_brief)
             failed_attempt = json.loads((output / "_support/story-attempt.json").read_bytes())

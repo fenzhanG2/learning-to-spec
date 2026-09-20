@@ -95,7 +95,7 @@ def main(argv=None):
             if arguments.max_calls < 0:
                 raise ValueError("--max-calls cannot be negative; zero allows only matching cached stages")
             if arguments.dry_run:
-                result = {"stages": ["source snapshot", "canonical work model", "source language", "joint human story and detailed Agent working record", "whole-document review and bounded repairs", "complete tool ledger and HTML/Markdown render"],
+                result = {"stages": ["source snapshot", "canonical work model", "source language", "joint human story and detailed Agent working record", "fresh delivered-pair transfer probe", "whole-document review and bounded repairs", "complete tool ledger and HTML/Markdown render"],
                           "max_calls": arguments.max_calls, "additional_story_calls_minimum": 2, "additional_story_calls_with_repairs_maximum": 30,
                           "language": arguments.language, "format_retry_policy": "At most one additional call per invalid JSON response, within the total budget",
                           "editorial_feedback": bool(arguments.editorial_feedback),

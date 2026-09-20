@@ -87,6 +87,8 @@ Use `--readers agent` or `--readers both` only for that user choice. Add `--allo
 
 The delivered folder is `PRIVATE_OUTPUT/deliverables/`. `PRIVATE_OUTPUT/deliverables.zip` contains exactly those selected files. A joint working draft and validation evidence remain in the private `story/` workspace to preserve consistent source-grounded review; do not share the entire workspace. CLI result paths and Studio downloads point only to selected deliverables.
 
+Generation includes a fresh receiving-reader probe of the rendered Agent/Evidence pair, followed by full-source adjudication of its findings across both editions. The probe sees no original transcript or prior feedback; mistaken or out-of-scope suggestions are rejected, not automatically applied. It runs on the first reviewed candidate, not again after every repair. All calls count toward the existing budget. This improves review coverage, but is neither actual task execution nor a guarantee of factual correctness. Private receipts retain citations, dispositions and measured costs; none of that audit machinery is added to the readable story.
+
 Reader, audience and delivery choices are bound to the privacy review. Changing them requires a new review. `private-story --resume` requires unchanged source and choices, plus renewed explicit confirmation. Old reviews lacking reader/delivery choices must be scanned again for the new workflow.
 
 ## Optional ArtifactStore publication

@@ -9,7 +9,7 @@ from session_spec.storage import file_hash, write_json
 from session_spec.story_pipeline import run_story, validate_story
 from session_spec.story_revision import load_revision
 from session_spec.story_context import root_packet
-from test_story_pipeline import FakeBackend, article, brief, edition_review, insights, packet
+from test_story_pipeline import FakeBackend, article, brief, edition_review, insights, packet, transfer_review
 
 
 class StoryRevisionTests(unittest.TestCase):
@@ -59,11 +59,12 @@ class StoryRevisionTests(unittest.TestCase):
             work, draft = self.seed(root)
             write_json(work / "source.json", source)
             write_json(work / "input.json", root_packet(packet()))
-            backend = FakeBackend([edition_review()])
+            backend = FakeBackend([transfer_review(), edition_review()])
             output = root / "revised"
             result = run_story(None, root / "copilot", output, from_export=base, revise_from=root / "prior", backend_factory=lambda **settings: backend)
-            self.assertEqual(result["model_calls"], 1)
-            self.assertEqual(backend.calls[0]["label"], "story-edition-review")
+            self.assertEqual(result["model_calls"], 2)
+            self.assertEqual(backend.calls[0]["label"], "story-transfer-probe")
+            self.assertEqual(backend.calls[1]["label"], "story-edition-review")
             self.assertTrue(validate_story(output)["valid"])
             self.assertEqual(json.loads((output / "_support/edition.json").read_bytes()), draft)
             origin = json.loads((output / "_support/draft-origin.json").read_bytes())
