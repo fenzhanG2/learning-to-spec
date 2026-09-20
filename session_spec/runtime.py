@@ -300,8 +300,8 @@ class LocalClient:
                 return
             with (self.root / "runtime.log").open("ab") as log:
                 flags = subprocess.CREATE_NO_WINDOW | subprocess.DETACHED_PROCESS if os.name == "nt" else 0
-                self.process = subprocess.Popen([sys.executable, "-X", "utf8", str(ROOT / "scripts/plugin_runtime.py"), "--root", str(self.root), "--home", str(copilot_home())],
-                                                stdin=subprocess.DEVNULL, stdout=log, stderr=log, cwd=ROOT,
+                self.process = subprocess.Popen([sys.executable, "-X", "utf8", str(ROOT / "scripts/plugin_runtime.py"), "--root", str(self.root), "--home", str(copilot_home().resolve())],
+                                                stdin=subprocess.DEVNULL, stdout=log, stderr=log, cwd=self.root,
                                                 creationflags=flags, start_new_session=os.name != "nt")
                 threading.Thread(target=self.process.wait, daemon=True).start()
             for attempt in range(100):
