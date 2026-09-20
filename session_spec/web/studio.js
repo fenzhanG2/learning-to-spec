@@ -1,7 +1,7 @@
 const parameters = new URLSearchParams(location.hash.slice(1));
 const access = parameters.get('access');
 const elements = name => document.getElementById(name);
-const state = { job: null, review: null, choices: {}, manifest: null, plan: null, busy: false, stage: 'source', published: false, generationRetry: false, connectionError: null };
+const state = { job: null, review: null, choices: {}, manifest: null, plan: null, busy: false, stage: 'source', published: false, generationRetry: false, connectionError: null, durableJobs: null };
 let planTimer;
 let planSequence = 0;
 function preview(html) {
@@ -38,7 +38,11 @@ const node = (tag, text, className) => {
 };
 function disconnected() {
   const identifier = state.job || (/^[a-f0-9]{32}$/.test(parameters.get('job') || '') ? parameters.get('job') : null);
-  state.connectionError = `Studio connection lost or response incomplete. Ask Copilot to reopen learning-to-spec${identifier ? ` job ${identifier}` : ' Studio'}. Check saved status before retrying: an operation may already have started. Unsubmitted choices may need selecting again.`;
+  const recovery = state.durableJobs === false
+    ? 'Restart the manual Studio command. Manual job IDs cannot be reopened through Copilot; use the saved review/generation paths for recovery.'
+    : state.durableJobs === true ? `Ask Copilot to reopen learning-to-spec${identifier ? ` job ${identifier}` : ' Studio'}.`
+      : `Reopen Studio from Copilot, or restart its manual command.${identifier ? ` Previous job: ${identifier}.` : ''}`;
+  state.connectionError = `Studio connection lost or response incomplete. ${recovery} Check saved status before retrying: an operation may already have started. Unsubmitted choices may need selecting again.`;
   state.plan = null;
   state.generationRetry = false;
   updateControls();
@@ -70,7 +74,7 @@ function updateControls() {
     const choice = state.choices[finding.id];
     return !choice?.action || (choice.action === 'generalize' && !choice.replacement?.trim());
   }).length;
-  elements('remaining').textContent = remaining ? `${remaining} still need your choice` : 'Ready to generate';
+  elements('remaining').textContent = state.connectionError ? 'Reopen Studio to continue' : remaining ? `${remaining} still need your choice` : 'Ready to generate';
   const unavailable = state.busy || Boolean(state.connectionError);
   for (const control of document.querySelectorAll('button, input, select, textarea')) control.disabled = unavailable;
   elements('generate').disabled = !state.review || Boolean(remaining) || unavailable;
@@ -392,6 +396,8 @@ elements('history').addEventListener('toggle', () => { if (elements('history').o
 perform(async () => {
   if (!access) throw new Error('Open Studio from Copilot, or use the complete private URL printed by the studio command.');
   const result = await request('/api/sessions');
+  state.durableJobs = typeof result.durable_jobs === 'boolean' ? result.durable_jobs : null;
+  if (state.durableJobs === false) elements('working-description').textContent = 'Keep the manual Studio command running while we work. Closing that process disconnects this page.';
   for (const session of result.sessions) {
     const option = node('option', `${session.title} · ${Math.round(session.bytes / 1024)} KB`);
     option.value = session.id; option.selected = session.id === 'selected' || session.id === parameters.get('session');

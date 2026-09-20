@@ -51,6 +51,7 @@ class StudioTests(unittest.TestCase):
         status, response_headers, body = self.request("/api/sessions", headers)
         self.assertEqual(status, 200)
         self.assertNotIn(str(self.root).encode(), body)
+        self.assertFalse(json.loads(body)["durable_jobs"])
         self.assertEqual(response_headers["Cache-Control"], "no-store")
         self.assertNotIn("Access-Control-Allow-Origin", response_headers)
 
@@ -60,6 +61,10 @@ class StudioTests(unittest.TestCase):
         self.assertNotIn(self.studio.token.encode(), body)
         self.assertIn("script-src 'self';", headers["Content-Security-Policy"])
         self.assertIn(b' sandbox', body)
+
+    def test_native_runtime_marks_its_jobs_as_durable(self):
+        from session_spec.runtime import DurableStudio
+        self.assertTrue(DurableStudio.durable_jobs)
 
     def test_three_step_ui_has_one_generate_action_and_no_review_checkboxes(self):
         _, _, body = self.request("/")

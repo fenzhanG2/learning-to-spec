@@ -31,7 +31,7 @@ async function fixture() {
       text: 'Synthetic private aside', reason: 'Your choice', occurrences: [{}], necessity: 'uncertain', detectors: ['local'] }] };
   const delivery = { files: ['agent-spec.md', 'evidence.md'], output: 'synthetic-only', preferences: review.preferences };
   const responses = {
-    '/api/sessions': { sessions: [{ id: 'selected', title: 'Synthetic', bytes: 100 }] }, '/api/jobs': { jobs: [] },
+    '/api/sessions': { sessions: [{ id: 'selected', title: 'Synthetic', bytes: 100 }], durable_jobs: true }, '/api/jobs': { jobs: [] },
     '/api/scan': { job: 'synthetic' }, '/api/status?job=synthetic': { status: 'done', stage: 'generate', delivery_result: delivery },
     '/api/review?job=synthetic': review, '/api/generate': { job: 'synthetic' },
     '/api/package': { package_id: 'package', files: { 'agent-spec.md': 'hash' }, findings: [{ id: 'residual', category: 'contact', file: 'agent-spec.md', text: 'example.invalid' }] },
@@ -115,6 +115,7 @@ test('lost generation connection keeps choices, names the saved job and never re
   assert.match(example.elements.status.textContent, /reopen learning-to-spec job synthetic/);
   assert.match(example.elements.status.textContent, /may already have started/);
   assert.match(example.elements.status.textContent, /Unsubmitted choices/);
+  assert.equal(example.elements.remaining.textContent, 'Reopen Studio to continue');
   assert.equal(example.elements.generate.disabled, true);
   assert.equal(example.elements.generate.textContent, 'Generate spec →');
   assert.equal(vm.runInContext('state.choices.personal.action', example.context), 'remove');
@@ -175,6 +176,16 @@ test('recovery guidance never includes a private access capability', async () =>
   assert.match(example.elements.status.textContent, /job a{32}/);
   assert.doesNotMatch(example.elements.status.textContent, /access|fixture|Bearer/);
   assert.doesNotMatch(example.elements['error-text'].textContent, /access|fixture|Bearer/);
+});
+
+test('manual Studio recovery never promises native job persistence', async () => {
+  const example = await fixture();
+  vm.runInContext("state.durableJobs = false; state.job = 'synthetic';", example.context);
+  example.responses['/api/jobs'] = () => { throw new TypeError('Failed to fetch'); };
+  await vm.runInContext("perform(() => request('/api/jobs'))", example.context);
+  assert.match(example.elements.status.textContent, /Restart the manual Studio command/);
+  assert.match(example.elements.status.textContent, /Manual job IDs cannot be reopened/);
+  assert.doesNotMatch(example.elements.status.textContent, /reopen learning-to-spec job/);
 });
 
 test('a new review never claims privacy decisions have already been saved', async () => {
