@@ -273,7 +273,7 @@ class ValidationTests(unittest.TestCase):
 
     def test_failed_tool_not_proof_of_success(self):
         records = copy.deepcopy(self.records)
-        records[2]["success"] = False
+        next(record for record in records if record["ref"] == "E000004")["success"] = False
         self.assertTrue(validate_spec(candidate(), records))
 
     def test_proven_reuse_requires_observation(self):

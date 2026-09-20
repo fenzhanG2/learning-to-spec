@@ -19,6 +19,7 @@ const english = {
   '已复制完整 Markdown，可直接粘贴给 Agent。': 'Complete Markdown copied. You can paste it into an agent.',
   '已选中全文，请按 Ctrl+C（Mac 为 ⌘C）复制。': 'Full text selected. Press Ctrl+C (Cmd+C on Mac) to copy.',
   '一段真实的技术工作': 'A REAL ENGINEERING SESSION', '回看这次留下的认识': 'Return to the takeaway',
+  '工程会话记录': 'ENGINEERING SESSION',
   '入口': 'Entry', '控制': 'Control', '处理': 'Processing', '存储': 'Storage', '产物': 'Artifact', '外部': 'External',
   '当次观察': 'observed in session', '实现约定': 'implementation', '返回/反馈': 'return / feedback',
   '产物架构': 'Artifact architecture', '实现流程': 'Implementation flow', '架构图，可横向滚动': 'Architecture diagram; scroll horizontally',

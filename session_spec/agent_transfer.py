@@ -148,8 +148,9 @@ def decision_phase(phase, ledger, label):
 
 
 def render_transfer(article, events, ledger, language, trajectory_style="decisions"):
-    portable = trajectory_style == "handoff-portable"
-    separate = trajectory_style in {"handoff-split", "handoff-portable"}
+    payload_aware = trajectory_style == "handoff-portable-v2"
+    portable = trajectory_style in {"handoff-portable", "handoff-portable-v2"}
+    separate = trajectory_style == "handoff-split" or portable
     if separate:
         trajectory_style = "handoff"
     legacy_roles = trajectory_style == "handoff-legacy"
@@ -159,7 +160,7 @@ def render_transfer(article, events, ledger, language, trajectory_style="decisio
         raise ValueError("Unknown trajectory rendering style")
     detail = article["agent_detail"]
     label = lambda english, chinese: chinese if language.startswith("zh") else english
-    evidence_index = EvidenceIndex(events, ledger, language, legacy_roles=legacy_roles, portable=portable) if trajectory_style == "handoff" else None
+    evidence_index = EvidenceIndex(events, ledger, language, legacy_roles=legacy_roles, portable=portable, payload_aware=payload_aware) if trajectory_style == "handoff" else None
     cite = evidence_index.cite if evidence_index else lambda refs: ", ".join(refs)
     sources_label = label("Selected evidence: ", "关键来源：") if evidence_index else label("Sources: ", "来源：")
     resume = detail["resume"]

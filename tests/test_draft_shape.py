@@ -28,7 +28,8 @@ class DraftShapeTests(unittest.TestCase):
             draft = {"article": expected, "brief": brief(), "insights": insights()}
             backend = FakeBackend([draft])
             generate_draft(Path(temporary), packet(), None, backend)
-            self.assertIn("输出前检查 /article/agent_detail", backend.prompts[0])
+            self.assertIn("输出前检查 /brief/schema=story-brief/v1", backend.prompts[0])
+            self.assertIn("/insights/schema=story-insights/v1", backend.prompts[0])
             receipt = json.loads((Path(temporary) / "joint-draft-receipt.json").read_bytes())
             self.assertEqual(receipt["identity"], digest(("joint-story-draft/v2" + backend.prompts[0] + "copilot-default").encode()))
             generate_draft(Path(temporary), packet(), None, backend)

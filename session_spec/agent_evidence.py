@@ -22,12 +22,13 @@ def argument_focus(arguments):
 
 
 class EvidenceIndex:
-    def __init__(self, events, ledger, language, legacy_roles=False, portable=False):
+    def __init__(self, events, ledger, language, legacy_roles=False, portable=False, payload_aware=False):
         self.events = {event["ref"]: event for event in events}
         self.calls = {}
         self.language = language
         self.legacy_roles = legacy_roles
         self.portable = portable
+        self.payload_aware = payload_aware
         for call in ledger["calls"]:
             for ref in [call["request_ref"], *[event["ref"] for event in call["results"]]]:
                 self.calls[ref] = call
@@ -44,13 +45,16 @@ class EvidenceIndex:
         if kind.startswith("tool."):
             call = self.calls.get(ref, {})
             tool = call.get("tool") or event.get("tool") or "unknown"
-            target = argument_focus(call.get("arguments") or event.get("arguments"))
+            arguments = (call.get("arguments") if "arguments" in call else event.get("arguments")) if self.payload_aware else (call.get("arguments") or event.get("arguments"))
+            target = argument_focus(arguments)
             request = kind == "tool.execution_start"
             role = self.label("Tool request", "工具请求") if request else self.label("Tool result", "工具结果")
             content = event.get("result", event.get("error", text))
             if isinstance(content, dict):
                 content = content.get("content", content)
             excerpt = target if request else short_text(content, 220)
+            if request and self.payload_aware and not excerpt and arguments is not None:
+                excerpt = short_text(arguments, 220)
             state = self.label("Request only; not completion.", "仅请求，不代表完成。") if request else self.label("Recorded output; not task acceptance.", "记录输出，不等于任务验收。")
             if not request and self.portable:
                 state = self.label("Recorded result; assess acceptance against the task's stated scope.", "记录结果；是否满足验收取决于本任务明确约定的范围。")
@@ -58,6 +62,8 @@ class EvidenceIndex:
                 state = self.label("Explicit tool failure.", "明确工具失败。")
             if not request and ref not in self.calls:
                 state += " " + self.label("No uniquely paired request.", "没有唯一配对的请求。")
+            if request and self.payload_aware and excerpt:
+                state += " " + self.label("Compact argument excerpt, not the complete invocation.", "简要参数摘录，不是完整调用。")
             title = str(tool) + " · " + (short_text(target, 66) if request and target else role + (": " + short_text(target, 54) if target else ""))
             context = role + " · " + str(tool) + (" · " + short_text(target, 160) if not request and target else "")
             return title, context, excerpt, state

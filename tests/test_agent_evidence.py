@@ -12,6 +12,31 @@ from test_story_pipeline import article, brief, insights, packet
 
 
 class AgentEvidenceTests(unittest.TestCase):
+    def test_patch_only_requests_are_present_bounded_and_legacy_compatible(self):
+        events = [{"ref": "E000001", "type": "tool.execution_start", "tool": "apply_patch", "tool_call_id": "patch-call",
+                   "arguments": {"patch": "*** Begin Patch\n*** Update File: module.py\n" + "LONG_PATCH_BODY" * 1000}}]
+        original = copy.deepcopy(events)
+        ledger = tool_ledger(events)
+        index = EvidenceIndex(events, ledger, "en", portable=True, payload_aware=True)
+        result = index.companion(index.finish("Source E000001", separate=True))
+        self.assertIn("module.py", result)
+        self.assertIn("Compact argument excerpt", result)
+        self.assertNotIn("No text payload recorded", result)
+        self.assertNotIn("LONG_PATCH_BODY" * 20, result)
+        legacy = EvidenceIndex(events, ledger, "en", portable=True)
+        self.assertIn("No text payload recorded", legacy.companion(legacy.finish("Source E000001", separate=True)))
+        self.assertEqual(events, original)
+
+    def test_unknown_argument_fields_do_not_become_missing_and_none_stays_missing(self):
+        for arguments in ({"target_files": ["one.py", "two.py"]}, {}, ["one.py"], None):
+            with self.subTest(arguments=arguments):
+                events = [{"ref": "E000001", "type": "tool.execution_start", "tool": "custom", "arguments": arguments}]
+                index = EvidenceIndex(events, tool_ledger(events), "en", portable=True, payload_aware=True)
+                output = index.companion(index.finish("E000001", separate=True))
+                self.assertEqual("No text payload recorded" in output, arguments is None)
+                if arguments:
+                    self.assertIn("one.py", output)
+
     def test_portable_companion_does_not_require_private_export_files(self):
         for language in ("en", "zh-CN"):
             with self.subTest(language=language):
