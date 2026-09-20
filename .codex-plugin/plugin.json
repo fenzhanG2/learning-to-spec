@@ -1,6 +1,6 @@
 {
   "name": "learning-to-spec",
-  "version": "0.5.3",
+  "version": "0.5.4",
   "description": "Export local Copilot sessions into human and agent work specs using Copilot CLI.",
   "author": {"name": "Local"},
   "skills": "./skills/",

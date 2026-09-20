@@ -17,30 +17,44 @@ Recognized credentials, hidden reasoning and binary payloads are always excluded
 
 Requirements: Python 3.10+, Node.js 18+, and an authenticated GitHub Copilot CLI. Rendering dependencies are bundled: installing a published plugin does not require npm or a manual clone. ArtifactStore is an optional Microsoft-tenant service and additionally needs an authorized Azure CLI sign-in; local export works without it.
 
-A standalone public repository can be installed directly, without playground access:
+### 1. Install
+
+This public repository does not require playground or Microsoft organization access. Register its marketplace once, then install:
 
 ```text
-copilot plugin install OWNER/learning-to-spec
+copilot plugin marketplace add fenzhanG2/learning-to-spec
+copilot plugin install learning-to-spec@learning-to-spec
+copilot plugin list
 ```
 
-In Copilot App, open **Customize → Installed** to confirm the plugin is enabled, then start a fresh session. For custom sources, use **Add plugin** with the published repository. Enterprise policies may restrict public plugins; this is not a way to bypass an organization's policy. Python, Node and Copilot authentication remain prerequisites, not dependencies silently installed by the plugin.
+Copilot currently also accepts `copilot plugin install fenzhanG2/learning-to-spec`, but warns that direct repository installs are deprecated. Prefer the marketplace commands above. Do not install both variants.
 
-Once the plugin is merged into the marketplace:
+In Copilot App, open **Customize → Installed** to confirm the plugin is enabled, then start a fresh session. If it is missing, verify that App and CLI use the same local profile. Enterprise policies may restrict public plugins; this is not a way to bypass an organization's policy. Python, Node and Copilot authentication remain prerequisites, not dependencies silently installed by the plugin. See [GitHub's CLI installation guide](https://docs.github.com/en/copilot/how-tos/copilot-cli/cli-getting-started) if `copilot` is not found.
+
+### 2. Export a session
+
+Start a new Copilot conversation and ask:
 
 ```text
-copilot plugin marketplace add agency-microsoft/playground
-copilot plugin install learning-to-spec@agency-playground
+Use learning-to-spec to export my session about [topic].
+Ask me which readers, privacy transformations and delivery I want.
 ```
 
-For a local checkout with the bundled renderer:
+You can supply a session UUID or an absolute `events.jsonl` path instead of a topic. The plugin lists local candidates if needed; it must not guess which session you meant. It then asks for Human / Agent / Both, local files / ArtifactStore, and local / contextual privacy detection. Inspect individual findings and confirm the changes before generation. Choosing local files does not disable Copilot model calls or quota usage.
+
+Open the private Studio URL the plugin provides, keep its process running, and complete the review. Download only the selected deliverables or their ZIP. Human output is `human-spec.html`; Agent output is `agent-spec.md` plus `evidence.md`. Keep the Markdown files together so evidence links resolve. Do not share the private working folder or Studio access URL.
+
+### 3. Update or troubleshoot
 
 ```text
-copilot --plugin-dir "/absolute/path/to/plugins/learning-to-spec"
+copilot plugin update learning-to-spec@learning-to-spec
 ```
 
-Ask Copilot: “Use learning-to-spec to export this session; ask me which readers, privacy transformations and delivery I want.”
+Restart your Copilot session after installing or updating. Ask the skill to run its bundled `scripts/doctor.py` if prerequisites or rendering fail; run it from the installed plugin root, not an unrelated working directory. It checks Python, Node version, CLI availability and renderer integrity without model calls. Authentication is checked during generation. No npm install or manual clone is required.
 
-Check prerequisites with `python scripts/doctor.py`. Copilot App and CLI share the plugin/skill format. Restart your Copilot session after an update. Native App plugin recognition and the explicit-choice gate have been tested separately from CLI generation; this is not a claim that every App version or policy configuration behaves identically.
+Copilot App and CLI share the plugin/skill format. Native App plugin recognition and the explicit-choice gate have been tested separately from CLI generation; this is not a claim that every App version or policy configuration behaves identically. ArtifactStore requires separate, authorized Microsoft Azure CLI access; a personal GitHub account alone does not grant it. Local export does not need Azure.
+
+For a development checkout only, use `copilot --plugin-dir "/absolute/path/to/learning-to-spec"`. The public repository is independent of the proposed playground submission; there is no requirement to add the private playground marketplace.
 
 ## Private review Studio
 

@@ -1,0 +1,40 @@
+name: Tests
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  offline-tests:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            python: '3.10'
+            node: '18'
+          - os: windows-latest
+            python: '3.12'
+            node: '22'
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+      - name: Test installed-user bundle without node_modules
+        run: python -X utf8 -m unittest discover -s tests -v
+      - name: Verify browser script syntax
+        run: node --check session_spec/web/studio.js
+      - name: Install build-only dependencies
+        run: npm ci --ignore-scripts --registry=https://registry.npmjs.org
+      - name: Verify reproducible renderer
+        run: |
+          npm run build
+          git diff --exit-code -- session_spec/web/renderer-bundle.json session_spec/web/render-story.bundle.cjs session_spec/web/render-story.bundle.cjs.LEGAL.txt third_party/rendering-dependencies.txt
