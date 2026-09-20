@@ -11,29 +11,30 @@ ROOT_FILES = {"plugin.json", "agency.json", "README.md", "pyproject.toml", "pack
 
 
 def build(destination, dependencies=False):
+    root = ROOT.resolve()
     destination = Path(destination).resolve()
     destination.parent.mkdir(parents=True, exist_ok=True)
     if destination.exists():
         raise ValueError("Release file already exists; use a new filename")
     files = []
     roots = DIRECTORIES | ({"node_modules"} if dependencies else set())
-    for path in sorted(ROOT.rglob("*")):
-        relative = path.relative_to(ROOT)
+    for path in sorted(root.rglob("*")):
+        relative = path.relative_to(root)
         if not path.is_file() or "__pycache__" in relative.parts or path.suffix == ".pyc":
             continue
         if relative.parts[0] not in roots and relative.as_posix() not in ROOT_FILES:
             continue
-        if path.is_symlink() or not path.resolve().is_relative_to(ROOT):
+        if path.is_symlink() or not path.resolve().is_relative_to(root):
             raise ValueError("Refusing to bundle linked files outside the plugin")
         files.append(path)
-    manifest = json.loads((ROOT / "plugin.json").read_bytes())
+    manifest = json.loads((root / "plugin.json").read_bytes())
     marketplace = {"name": "learning-to-spec-local", "owner": {"name": "Local"}, "metadata": {"description": "Privacy-first session publishing", "version": manifest["version"]},
                    "plugins": [{"name": manifest["name"], "description": manifest["description"], "version": manifest["version"], "source": "./plugins/learning-to-spec"}]}
     hashes = {}
     with zipfile.ZipFile(destination, "x", compression=zipfile.ZIP_DEFLATED) as archive:
         archive.writestr(".github/plugin/marketplace.json", json.dumps(marketplace, indent=2))
         for path in files:
-            name = "plugins/learning-to-spec/" + path.relative_to(ROOT).as_posix()
+            name = "plugins/learning-to-spec/" + path.relative_to(root).as_posix()
             content = path.read_bytes()
             hashes[name] = hashlib.sha256(content).hexdigest()
             archive.writestr(name, content)

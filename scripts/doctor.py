@@ -1,5 +1,7 @@
 import json
+import re
 import shutil
+import subprocess
 import sys
 from pathlib import Path
 
@@ -10,8 +12,20 @@ from session_spec.backend import find_copilot
 from session_spec.story_pipeline import renderer_entry
 
 
+def supported_node():
+    executable = shutil.which('node')
+    if not executable:
+        return False
+    try:
+        result = subprocess.run([executable, '--version'], capture_output=True, text=True, timeout=10)
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    version = re.fullmatch(r'v(\d+)\.\d+\.\d+(?:-[\w.-]+)?', result.stdout.strip())
+    return result.returncode == 0 and bool(version) and int(version.group(1)) >= 18
+
+
 def main():
-    checks = {'python_3_10_or_newer': sys.version_info >= (3, 10), 'node': bool(shutil.which('node'))}
+    checks = {'python_3_10_or_newer': sys.version_info >= (3, 10), 'node_18_or_newer': supported_node()}
     try:
         checks['copilot_cli'] = bool(find_copilot())
     except (ValueError, FileNotFoundError):

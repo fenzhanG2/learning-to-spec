@@ -17,6 +17,18 @@ SPEC.loader.exec_module(BUILD)
 
 
 class ReleaseTests(unittest.TestCase):
+    def test_public_marketplace_resolves_root_plugin(self):
+        root = SCRIPT.parents[1]
+        manifest = json.loads((root / 'plugin.json').read_bytes())
+        catalog = json.loads((root / '.github/plugin/marketplace.json').read_bytes())
+        self.assertEqual(catalog['name'], 'learning-to-spec')
+        self.assertEqual(len(catalog['plugins']), 1)
+        entry = catalog['plugins'][0]
+        self.assertEqual((root / entry['source']).resolve(), root)
+        self.assertEqual(entry['name'], manifest['name'])
+        self.assertEqual(entry['version'], manifest['version'])
+        self.assertTrue((root / entry['source'] / 'skills/learning-to-spec/SKILL.md').is_file())
+
     @unittest.skipUnless(shutil.which('node'), 'Node.js is needed for renderer integration')
     def test_release_renders_without_npm_or_node_modules(self):
         from test_story_pipeline import article, insights
