@@ -17,7 +17,8 @@ class UsageReceiptTests(unittest.TestCase):
             payloads = [
                 {"type": "assistant.message", "data": {"content": "PRIVATE_CANARY", "reasoning": "HIDDEN_CANARY"}},
                 {"type": "session.shutdown", "data": {"totalApiDurationMs": 5}},
-                {"type": "session.shutdown", "data": {"tokenDetails": tokens, "currentModel": "test-model", "content": "PRIVATE_CANARY"}},
+                {"type": "session.shutdown", "data": {"tokenDetails": {**tokens, "content": "PRIVATE_CANARY"},
+                                                        "currentModel": "test-model", "content": "PRIVATE_CANARY"}},
             ]
             events.write_text("\n".join(json.dumps(event) for event in payloads), encoding="utf-8")
             self.assertEqual(isolated_usage(root), [{"tokenDetails": tokens, "currentModel": "test-model"}])

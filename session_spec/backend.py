@@ -193,6 +193,13 @@ def response_from_events(output):
                       "models": sorted(models), "message_lengths": [len(message) for message in messages], "response_selection": selection}
 
 
+def numeric_metrics(value):
+    if isinstance(value, dict):
+        return {key: numeric_metrics(nested) for key, nested in value.items()
+                if isinstance(nested, (dict, int, float)) and not isinstance(nested, bool)}
+    return value
+
+
 def isolated_usage(directory):
     receipts = []
     for filename in sorted((Path(directory) / "session-state").glob("*/events.jsonl")):
@@ -205,7 +212,8 @@ def isolated_usage(directory):
         except (OSError, ValueError):
             continue
         if shutdown:
-            receipts.append({key: shutdown[key] for key in ("totalPremiumRequests", "totalNanoAiu", "tokenDetails",
+            receipts.append({key: shutdown[key] if key == "currentModel" else numeric_metrics(shutdown[key])
+                             for key in ("totalPremiumRequests", "totalNanoAiu", "tokenDetails",
                              "totalApiDurationMs", "modelMetrics", "currentModel") if key in shutdown})
     return receipts
 
