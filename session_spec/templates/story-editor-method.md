@@ -62,6 +62,7 @@
 - 审阅来源引用优先使用短的、连续的原文片段。不要手工重排多行代码、把行号去掉后再重新缩进，或将不同事件拼成一句引文。工具请求与完成通常是不同 ref，必须按调用 ID 核对实际内容。
 - 程序只在逐字引文于同一角色中唯一匹配时纠正错位 ref，或在稿件中唯一匹配时纠正 JSON 路径；不替换引文内容，不改变来源角色，不进行近义/模糊语义匹配。Read/view 输出中已知的数字箭头行号可作为展示包装移除，除此以外不折叠代码空白。每次定位调整保留回执；不唯一就仍需审阅器澄清。
 - 引文定位只是完整性校验，不证明推断成立。正确引用的旧状态也可能不能支持当前结论，仍要按时间片、调用结果与目标层级复核。
+- Quote `origin` names the observable payload channel, not inferred authorship. A question composed by the assistant inside an AskUserQuestion request is `origin=tool`; a returned user answer is human only when an actual `human_input` field supplies that quote. RATIONALE_FOCUS.quote_origins lists the available channels, not authority or proof of a motive. Keep Markdown markers and escapes exactly as recorded; display text and rendered evidence links are not raw source strings. Diagnostic source lines are navigation hints, not automatically accepted replacement evidence.
 - 仅对发布契约的普通文字引文，若唯一差异是直双引号与排版弯双引号，程序可在唯一匹配时定位回真正原文并记录调整。不会对历史来源引文、反引号代码、词句、空白或含义做这种替换；改词、代码差异或多处匹配仍必须澄清。
 - 指出空数组／空对象的实际遗漏时，允许在该真实字段路径逐字引用 `[]`／`{}`，并提供来源或契约依据；不要为了让 quote 匹配而捏造字段文字。大小写、标点或 Markdown 不匹配时，程序返回对应位置的实际文本作为定位提示，不自动接受近似引文。
 

@@ -1,5 +1,5 @@
 from .source_excerpt import excerpt_segments, payload_text, source_payload
-from .story_grounding import quote_basis
+from .story_grounding import quote_basis, source_quote_diagnostic, source_quote_origins
 
 
 SCHEMA = "rationale-audit/v2"
@@ -39,6 +39,7 @@ def rationale_focus(edition, events):
         segments = excerpt_segments(text, limit)
         remaining -= sum(len(segment["text"]) for segment in segments)
         sources.append({"ref": reference, "type": event.get("type"), "human_authority": bool(event.get("human_input")),
+                        "quote_origins": source_quote_origins(event),
                         "tool": event.get("tool"), "characters": len(text), "truncated": len(text) > limit, "segments": segments})
     return {"schema": SCHEMA, "rationales": rows, "sources": sources, "omitted_source_refs": omitted,
             "limit": "Every retained phase rationale is audited; not_recorded has no claimed rationale. Quotes are from reduced observable payloads only. "
@@ -81,7 +82,10 @@ def validate_rationale_audit(review, focus, events):
             source = evidence.get(reference) if isinstance(reference, str) else None
             if (source is None or origin not in ("human", "assistant", "tool", "context")
                     or not isinstance(quote, str) or len(quote) > 500 or not quote_basis(source, origin, quote)):
-                errors.append(prefix + "source span must be short, literal and match the observable source role")
+                if source is None or not isinstance(quote, str) or len(quote) > 500:
+                    errors.append(prefix + "source span needs a known reference and a nonempty literal string of at most 500 characters")
+                else:
+                    errors.append(prefix + source_quote_diagnostic(source, origin, quote))
             if status == "supported" and reference not in row["refs"]:
                 errors.append(prefix + "support is absent from the rationale's declared refs; repair the authored record first")
         if status == "supported" and row["basis"] == "recorded" and any(isinstance(span, dict) and span.get("ref") in row["later_refs"] for span in support):
