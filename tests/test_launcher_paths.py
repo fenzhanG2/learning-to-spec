@@ -18,6 +18,13 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class LauncherPathTests(unittest.TestCase):
+    @unittest.skipUnless(shutil.which("node"), "Node launcher boundary regressions")
+    def test_launcher_encoding_and_directory_fallback_boundaries(self):
+        environment = {**os.environ, "TEST_PYTHON_EXECUTABLE": sys.executable}
+        result = subprocess.run([shutil.which("node"), "--test", str(ROOT / "tests/launcher_paths.cjs")],
+                                cwd=ROOT, env=environment, capture_output=True, text=True, encoding="utf-8", timeout=30)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
     def test_runtime_uses_private_working_directory_and_absolute_profile(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary).resolve()
@@ -45,7 +52,7 @@ class LauncherPathTests(unittest.TestCase):
             shutil.copytree(ROOT / "session_spec", plugin / "session_spec", ignore=shutil.ignore_patterns("__pycache__", "web"))
             environment = os.environ.copy()
             environment.update(COPILOT_HOME="../empty-fixture-home", LEARNING_TO_SPEC_HOME="../runtime",
-                               PYTHONDONTWRITEBYTECODE="1", PYTHONIOENCODING="utf-8")
+                               PYTHONDONTWRITEBYTECODE="1", PYTHONIOENCODING="utf-16")
             responses = queue.Queue()
             with (root / "stderr.log").open("w", encoding="utf-8") as errors:
                 process = subprocess.Popen([shutil.which("node"), str(plugin / "scripts/plugin_mcp.cjs")],
