@@ -58,6 +58,18 @@ class StudioTests(unittest.TestCase):
         self.assertIn("script-src 'self';", headers["Content-Security-Policy"])
         self.assertIn(b' sandbox', body)
 
+    def test_preview_uses_srcdoc_without_relaxing_sandbox(self):
+        status, headers, body = self.request('/')
+        self.assertEqual(status, 200)
+        self.assertRegex(body.decode(), r'<iframe id="human-preview"[^>]* sandbox>')
+        self.assertNotIn(b'allow-scripts', body)
+        self.assertNotIn(b'allow-same-origin', body)
+        status, _, script = self.request('/studio.js')
+        self.assertEqual(status, 200)
+        self.assertIn(b"elements('human-preview').srcdoc = html", script)
+        self.assertNotIn(b'let previewUrl', script)
+        self.assertIn("frame-ancestors 'none'", headers['Content-Security-Policy'])
+
     def test_legacy_review_ui_does_not_offer_personal_bulk_removals(self):
         self.studio.jobs["test"] = {"id": "test", "status": "done", "directory": self.root}
         legacy = {"review_id": "legacy", "findings": [{

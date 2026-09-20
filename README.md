@@ -33,7 +33,7 @@ In Copilot App, open **Customize → Installed** to confirm the plugin is enable
 
 ### 2. Export a session
 
-Start a new Copilot conversation and ask:
+Start a new Copilot conversation in **Interactive** mode and ask:
 
 ```text
 Use learning-to-spec to export my session about [topic].
@@ -50,7 +50,9 @@ Open the private Studio URL the plugin provides, keep its process running, and c
 copilot plugin update learning-to-spec@learning-to-spec
 ```
 
-Restart your Copilot session after installing or updating. Ask the skill to run its bundled `scripts/doctor.py` if prerequisites or rendering fail; run it from the installed plugin root, not an unrelated working directory. It checks Python, Node version, CLI availability and renderer integrity without model calls. Authentication is checked during generation. No npm install or manual clone is required.
+Restart your Copilot session after installing or updating. If CLI lists the plugin but the running App still reports `Skill not found`, do not assume it loaded: retry after restarting the App when other active work can safely stop. A new conversation or switching Customize tabs may not refresh the App's plugin registry. Autopilot mode may report that the user is unavailable to answer; use Interactive mode for native questions, or the Studio's explicit-choice UI.
+
+Ask the skill to run its bundled `scripts/doctor.py` if prerequisites or rendering fail; run it from the installed plugin root, not an unrelated working directory. It checks Python, Node version, CLI availability and renderer integrity without model calls. Authentication is checked during generation. No npm install or manual clone is required. On systems where Python is named `python3`, use that command in place of `python`.
 
 Copilot App and CLI share the plugin/skill format. Native App plugin recognition and the explicit-choice gate have been tested separately from CLI generation; this is not a claim that every App version or policy configuration behaves identically. ArtifactStore requires separate, authorized Microsoft Azure CLI access; a personal GitHub account alone does not grant it. Local export does not need Azure.
 
