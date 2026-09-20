@@ -33,7 +33,7 @@ def resolve_language(events, requested="auto"):
 def language_contract(language="auto"):
     if language == "auto":
         return ("\n\nSOURCE_LANGUAGE_POLICY\nNaturally follow the language of the source session's human conversation in both reader editions, "
-                "including titles, diagrams and conclusions. No target language is prescribed. Preserve meaningful language switching and technical terminology. "
+                "including short route labels, route descriptions, titles, diagram captions and conclusions. No target language is prescribed. Preserve meaningful language switching and technical terminology. "
                 "Do not take the language of these instructions, tool logs, or auxiliary drafts as the language to write in. "
                 "Keep source quotations, code, commands, identifiers and schema enums unchanged. Do not translate historical command arguments.\n")
     return ("\n\nOUTPUT_LANGUAGE_CONTRACT\nThe output language is " + language + ". Write BOTH human prose and Agent handoff in this language, "
@@ -49,6 +49,7 @@ def source_script_issues(edition, events):
     if source_latin < 200 or source_cjk:
         return []
     problems = []
+    source_literals = "\n".join(str(event.get(key, "")) for event in events for key in ("human_input", "text"))
 
     def inspect(value, path):
         if isinstance(value, dict):
@@ -62,7 +63,10 @@ def source_script_issues(edition, events):
             narrative = prose(value)
             cjk = len(re.findall(r"[\u3040-\u30ff\u3400-\u9fff\uac00-\ud7af]", narrative))
             latin = len(re.findall(r"[A-Za-z]", narrative))
-            if cjk >= 40 and cjk > latin * 0.7:
+            short_route = re.fullmatch(r"/article/route/\d+/(?:title|detail)", path)
+            source_literal = narrative.strip() and narrative.strip() in source_literals
+            if not source_literal and ((cjk >= 40 and cjk > latin * 0.7)
+                                       or (short_route and cjk >= 3 and cjk > latin * 0.3)):
                 problems.append(path)
 
     inspect(edition, "")

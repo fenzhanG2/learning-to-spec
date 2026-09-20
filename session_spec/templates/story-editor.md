@@ -4,6 +4,9 @@
 
 ## 稿件树与发布约定
 
+- 自然沿用源会话语言的要求覆盖 route 的 title/detail、图标签等短文案，不仅是长段落。逐项检查，不能因为整体语言正确就忽略混用提示词语言的短标签。保留源材料的实际引文、代码和有意义的语言切换，不预设目标语言。
+- 隐私裁剪不是故事情节。两版正文不能特意指出已省略无关联系人、私事或旁白，也不能推测其内容；这类说明只留内部 coverage。若缺失的是接手必需的参数或权限，则只说明需要重新取得的前提，不能隐瞒技术失败、纠正和验收边界。
+
 - 人读页开头实际渲染的是 `/brief` 八个字段，`article.opening/outcome` 是兼容旧产物的备用导语，有 brief 时不展示。篇幅上限只计 `/brief` 的所有 text；要修篇幅，必须压缩 brief，不能改备用导语交差。
 - 三个根是 `/article`、`/brief`、`/insights`。Agent 在 `/article/agent_markdown`，图与结尾在 `/insights/architecture` 和 `/insights/closing`；issue 给出一个真实 JSON pointer，同类其他位置写进 reason，不拼接多个路径作为 pointer。
 - 本发布器会生成同目录 `human-spec.html`、`agent-spec.md` 以及 `_support/evidence.jsonl`、`_support/source.json` 等证据附件；证据索引用 ref 字段关联。它们是导出器建立的交付入口，不是原会话运行产物，不必出现在历史事件中。Agent 可以引用相对证据路径，但不得将其混同于原工程路径；如果只单独传递 Markdown，证据附件也需一并提供或另行定位。

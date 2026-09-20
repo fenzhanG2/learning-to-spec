@@ -66,6 +66,24 @@ class AgentHandoffTests(unittest.TestCase):
             self.assertNotIn("The output language is", prompt)
             self.assertNotIn("Language: auto", prompt)
 
+    def test_short_route_labels_cannot_follow_the_exporter_language(self):
+        events = [{"human_input": "Keep the retry count bounded and preserve the failed test. " * 8}]
+        candidate = {"article": {"title": "Bounded retry", "route": [
+            {"title": "读现有循环", "detail": "发现 while True 无上限"},
+            {"title": "加尝试上限", "detail": "改为 range(3)，保留可注入 sleep"}]}}
+        issues = validate_language(candidate, 'auto', events)
+        self.assertTrue(issues)
+        self.assertIn('/article/route/0/title', issues[0])
+        self.assertIn('/article/route/1/detail', issues[0])
+        self.assertEqual(validate_language(candidate, 'zh-CN', events), [])
+        self.assertEqual(validate_language(candidate, 'auto', [{'human_input': '保留源语言。' + events[0]['human_input']}]), [])
+
+    def test_route_keeps_literal_source_labels_and_code(self):
+        events = [{'human_input': 'Document the existing status labels without translating source strings. ' * 8},
+                  {'text': 'The exact UI label is 恢复工作 and the function name is 重试请求.'}]
+        candidate = {'article': {'route': [{'title': '恢复工作', 'detail': 'Inspect `重试请求` before changing behavior.'}]}}
+        self.assertEqual(validate_language(candidate, 'auto', events), [])
+
     def test_default_draft_is_not_an_explicit_language_request(self):
         with tempfile.TemporaryDirectory() as temporary:
             directory = Path(temporary)

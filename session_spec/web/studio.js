@@ -1,11 +1,8 @@
 const access = new URLSearchParams(location.hash.slice(1)).get('access');
 const elements = name => document.getElementById(name);
 const state = { job: null, review: null, choices: {}, manifest: null, plan: null, busy: false };
-let previewUrl;
 function preview(html) {
-  if (previewUrl) URL.revokeObjectURL(previewUrl);
-  previewUrl = URL.createObjectURL(new Blob([html], { type: 'text/html' }));
-  elements('human-preview').src = previewUrl;
+  elements('human-preview').srcdoc = html;
 }
 const status = (text, error = false) => { elements('status').textContent = text; elements('status').classList.toggle('error', error); };
 const show = stage => {
