@@ -70,6 +70,11 @@ def run_story(session, home, destination, from_export=None, model=None, gh_host=
         work.mkdir(exist_ok=True)
         backend = backend_factory(model=model, gh_host=gh_host, timeout=timeout, max_calls=max_calls)
         attempt = {"status": "running", "calls": []}
+        prior_attempt = support / "story-attempt.json"
+        if resume and prior_attempt.is_file():
+            previous = json.loads(prior_attempt.read_bytes())
+            attempt["previous_runs"] = [*previous.get("previous_runs", []),
+                                        {key: value for key, value in previous.items() if key != "previous_runs"}]
         try:
             base = Path(from_export).resolve() if from_export else support / "canonical"
             if from_export and (destination == base or base.is_relative_to(destination)):
