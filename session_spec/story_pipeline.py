@@ -22,6 +22,7 @@ from .agent_package import EVIDENCE_RENDERER, HUMAN_PRESENTATION, LEGACY_PRESENT
 from .language import resolve_language, validate_language
 from .story_revision import load_revision
 from .transfer_probe import effective_feedback
+from .minimization_review import SCHEMA as MINIMIZATION_SCHEMA, minimization_focus, validate_minimization
 
 
 RENDERER = Path(__file__).resolve().parent / "web/render-story.cjs"
@@ -202,6 +203,10 @@ def validate_story(directory):
             except ValueError as error:
                 errors.append(str(error))
             errors.extend(validate_review(receipt.get("review"), feedback, protocol=receipt.get("review_protocol")))
+            if receipt.get("review_protocol") == "grounded-findings/v4" and isinstance(receipt.get("review"), dict):
+                if receipt.get("identity", {}).get("minimization_focus") != MINIMIZATION_SCHEMA:
+                    errors.append("Unknown or missing minimization index identity")
+                errors.extend(validate_minimization(receipt["review"], edition, packet, minimization_focus(edition, packet)))
             if receipt.get("status") != "completed" or receipt.get("review", {}).get("issues") or receipt.get("output_sha256") != file_hash(edition_path):
                 errors.append("Whole-document review does not match the accepted edition")
             if not brief_path.is_file() or edition != {"article": article, "insights": insights, "brief": json.loads(brief_path.read_bytes())}:

@@ -11,14 +11,16 @@ from .language import language_contract, source_language_reference, validate_lan
 from .model_io import generate_json
 from .review_focus import SCHEMA as FOCUS_SCHEMA, review_focus
 from .review_crosswalk import SCHEMA as CROSSWALK_SCHEMA, review_crosswalk
+from .minimization_review import SCHEMA as MINIMIZATION_SCHEMA, minimization_focus, validate_minimization
 from .transfer_probe import (ADJUDICATION, SCHEMA as PROBE_SCHEMA, contract as probe_contract, effective_feedback, feedback_context,
                              probe_feedback, resolve_feedback_locations, run_probe, validate_resolutions)
 from .agent_package import EVIDENCE_RENDERER
 
 
 EDITION_SCHEMA = "story-edition/v2"
-REVIEW_PROTOCOL = "grounded-findings/v3"
-CHECKS = ("origin_and_goals", "narrative_and_scope", "readability", "evidence_strength", "mechanism", "agent_handoff", "acceptance_scope")
+REVIEW_PROTOCOL = "grounded-findings/v4"
+CHECKS = ("origin_and_goals", "narrative_and_scope", "readability", "evidence_strength", "mechanism", "agent_handoff", "acceptance_scope", "data_minimization")
+PROTOCOL_CHECKS = {None: CHECKS[:6], "grounded-findings/v2": CHECKS[:6], "grounded-findings/v3": CHECKS[:7], REVIEW_PROTOCOL: CHECKS}
 
 
 def fingerprint(value):
@@ -97,9 +99,9 @@ def validate_feedback(feedback, events, source_sha256):
 
 
 def validate_review(review, feedback=None, protocol=REVIEW_PROTOCOL):
-    if protocol not in (None, "grounded-findings/v2", REVIEW_PROTOCOL):
+    if protocol is not None and not isinstance(protocol, str) or protocol not in PROTOCOL_CHECKS:
         return ["Unknown whole-document review protocol"]
-    required_checks = CHECKS if protocol == REVIEW_PROTOCOL else CHECKS[:-1]
+    required_checks = PROTOCOL_CHECKS[protocol]
     if not isinstance(review, dict) or not isinstance(review.get("issues"), list):
         return ["Invalid whole-document review"]
     if any(not isinstance(issue, dict) or not isinstance(issue.get("reason"), str) or not issue["reason"].strip() for issue in review["issues"]):
@@ -153,7 +155,7 @@ def generate_edition(directory, draft, events, backend, article_validator, model
     structure_contract = (PROMPTS / "story-draft.md").read_text(encoding="utf-8")
     brief_contract = (PROMPTS / "story-brief.md").read_text(encoding="utf-8")
     brief_review = (PROMPTS / "story-brief-review.md").read_text(encoding="utf-8")
-    identity = {"schema": EDITION_SCHEMA, "review_protocol": REVIEW_PROTOCOL, "review_focus": FOCUS_SCHEMA, "review_crosswalk": CROSSWALK_SCHEMA, "draft_sha256": fingerprint(draft), "input_sha256": fingerprint(events),
+    identity = {"schema": EDITION_SCHEMA, "review_protocol": REVIEW_PROTOCOL, "review_focus": FOCUS_SCHEMA, "review_crosswalk": CROSSWALK_SCHEMA, "minimization_focus": MINIMIZATION_SCHEMA, "draft_sha256": fingerprint(draft), "input_sha256": fingerprint(events),
                 "contract_sha256": digest((contract + brief_contract + brief_review + structure_contract).encode()),
                 "model": model or "copilot-default", "prior_findings_sha256": fingerprint(prior_findings or []),
                 "feedback_sha256": fingerprint(feedback or [])}
@@ -167,6 +169,7 @@ def generate_edition(directory, draft, events, backend, article_validator, model
         try:
             accepted_feedback = effective_feedback(receipt, feedback, events)
             feedback_errors = validate_resolutions(receipt.get("review", {}), accepted_feedback, edition, events, contract + brief_contract + brief_review)
+            feedback_errors += validate_minimization(receipt.get("review", {}), edition, events, minimization_focus(edition, events))
         except ValueError as error:
             accepted_feedback, feedback_errors = [], [str(error)]
         if (receipt.get("identity") == identity and receipt.get("status") == "completed"
@@ -245,14 +248,17 @@ def generate_edition(directory, draft, events, backend, article_validator, model
                 write_json(directory / f"edition-focus-{attempt}.json", {"candidate_sha256": candidate_hash, **focus})
                 crosswalk = review_crosswalk(edition, events)
                 write_json(directory / f"edition-crosswalk-{attempt}.json", {"candidate_sha256": candidate_hash, **crosswalk})
-                review_fields = "issues/suggestions/checked/summary" + ("/feedback_resolution" if current_feedback else "")
+                minimization = minimization_focus(edition, events)
+                write_json(directory / f"edition-minimization-{attempt}.json", {"candidate_sha256": candidate_hash, **minimization})
+                review_fields = "issues/suggestions/checked/summary/minimization" + ("/feedback_resolution" if current_feedback else "")
                 review_prompt = (contract + context + feedback_context(current_feedback) + "\n\nCURRENT_EDITION\n" + json.dumps(edition, ensure_ascii=False)
                                  + "\n\nREVIEW_FOCUS (deterministic excerpts of this same edition, not evidence or extra authority)\n" + json.dumps(focus, ensure_ascii=False)
                                  + "\n\nSOURCE_CLAIM_CROSSWALK (citation-locality aid, not proof; verify exact source and all visible counterparts)\n" + json.dumps(crosswalk, ensure_ascii=False)
+                                 + "\n\nMINIMIZATION_FOCUS (reduced-source locality, not original private content or a keyword ban)\n" + json.dumps(minimization, ensure_ascii=False)
                                  + "\n\nPRIOR_REPAIR_FINDINGS (historical review findings, not current facts; recheck against source and every visible counterpart)\n"
                                  + json.dumps(prior_review_findings(receipt["failures"]), ensure_ascii=False)
                                  + "\n\nDETERMINISTIC_CHECKS\n[]"
-                                 + f"\n只返回包含 {review_fields} 的审阅 JSON。阻断项必须提供实际稿件原文、来源原文及角色或逐字契约依据；全部七项检查一次完成，包括独立的 acceptance_scope 验收范围检查。")
+                                 + f"\n只返回包含 {review_fields} 的审阅 JSON。阻断项必须提供实际稿件原文、来源原文及角色或逐字契约依据；全部八项检查一次完成，包括独立的 acceptance_scope 和 data_minimization 检查。")
                 review = generate_json(backend, review_prompt, "story-edition-review", directory)
                 write_json(directory / f"edition-review-{attempt}.json", review)
                 review_errors = validate_review(review, current_feedback)
@@ -264,6 +270,7 @@ def generate_edition(directory, draft, events, backend, article_validator, model
                 write_json(directory / f"edition-review-{attempt}-locations.json", {"review": review, "relocations": locations})
                 review_errors = validate_grounding(review, edition, events, contract + brief_contract + brief_review)
                 review_errors += validate_resolutions(review, current_feedback, edition, events, contract + brief_contract + brief_review)
+                review_errors += validate_minimization(review, edition, events, minimization)
                 if review_errors:
                     review = generate_json(backend, review_prompt + "\n\nINVALID_REVIEW\n" + json.dumps(review, ensure_ascii=False)
                                               + "\nREVIEW_ERRORS\n" + json.dumps(review_errors, ensure_ascii=False)
@@ -278,6 +285,7 @@ def generate_edition(directory, draft, events, backend, article_validator, model
                         write_json(directory / f"edition-review-{attempt}-grounded-locations.json", {"review": review, "relocations": locations})
                         review_errors = validate_grounding(review, edition, events, contract + brief_contract + brief_review)
                         review_errors += validate_resolutions(review, current_feedback, edition, events, contract + brief_contract + brief_review)
+                        review_errors += validate_minimization(review, edition, events, minimization)
                 if review_errors:
                     raise ValueError("; ".join(review_errors))
                 errors = review["issues"]
