@@ -31,22 +31,25 @@ def validate_article(article, packet):
         return ["Invalid chapter IDs"]
     if len(set(ids)) != len(ids) or any(identifier in ("story-takeaway", "story-brief") for identifier in ids):
         issues.append("Duplicate or reserved chapter ID")
-    visible = [article[field] for field in ("title", "subtitle", "period", "opening", "outcome")]
-    for chapter in article["chapters"]:
+    visible = [("/article/" + field, article[field]) for field in ("title", "subtitle", "period", "opening", "outcome")]
+    for index, chapter in enumerate(article["chapters"]):
         if not isinstance(chapter.get("title"), str) or not isinstance(chapter.get("markdown"), str):
             issues.append("Chapter title/body missing")
         details = chapter.get("details", [])
         if not isinstance(details, list) or any(not isinstance(detail, dict) or not isinstance(detail.get("title"), str) or not isinstance(detail.get("markdown"), str) for detail in details):
             issues.append("Invalid chapter details")
             details = []
-        visible.extend([chapter.get("title", ""), chapter.get("markdown", ""), *[detail["markdown"] for detail in details]])
+        prefix = f"/article/chapters/{index}"
+        visible.extend((prefix + "/" + key, chapter.get(key, "")) for key in ("title", "markdown"))
+        visible.extend((f"{prefix}/details/{detail_index}/{key}", detail[key])
+                       for detail_index, detail in enumerate(details) for key in ("title", "markdown"))
         if not chapter.get("refs"):
             issues.append("Chapter has no evidence: " + chapter["id"])
     for field, required in (("route", ("title", "detail")), ("checks", ("question", "observed", "limit"))):
-        for item in article[field]:
+        for index, item in enumerate(article[field]):
             if any(not isinstance(item.get(key), str) for key in required):
                 issues.append("Invalid " + field + " entry")
-            visible.extend(item.get(key, "") for key in required)
+            visible.extend((f"/article/{field}/{index}/{key}", item.get(key, "")) for key in required)
     for coverage in article["reader_coverage"]:
         if not isinstance(coverage.get("chapters"), list) or not coverage["chapters"] or any(identifier not in ids for identifier in coverage["chapters"]):
             issues.append("Reader question has no matching chapter")
@@ -78,8 +81,12 @@ def validate_article(article, packet):
         issues.append("Human input coverage must have unique refs and nonempty treatment at /article/human_input_coverage; duplicates=" + str(duplicates) + "; invalid/empty indices=" + str(empty))
     if any(event["ref"] not in covered for event in packet if event.get("human_input")):
         issues.append("Human input coverage incomplete at /article/human_input_coverage; missing=" + str(sorted(human_refs - covered)))
-    if any(re.search(r"\bE\d{6}\b|\]\(#\)", str(text)) for text in visible):
-        issues.append("Visible article contains evidence IDs or placeholder links")
+    for pointer, text in visible:
+        match = re.search(r"\bE\d{6}\b|\]\(#\)", str(text))
+        if match:
+            issues.append(f"Visible human article contains an evidence ID or placeholder link at {pointer}: {match.group()!r}. "
+                          "Repair this human-facing field only; preserve its factual meaning and internal refs. "
+                          "Do not remove the required inline citations from /article/agent_markdown.")
     if "agent_detail" in article:
         issues.extend(validate_agent_detail(article["agent_detail"], packet))
     return issues
