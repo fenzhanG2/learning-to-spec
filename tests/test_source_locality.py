@@ -7,7 +7,7 @@ from pathlib import Path
 from session_spec.agent_evidence import EvidenceIndex
 from session_spec.agent_handoff import tool_ledger
 from session_spec.agent_package import render_agent_package
-from session_spec.review_crosswalk import MAX_CROSSWALK_CHARS, SCHEMA, review_crosswalk
+from session_spec.review_crosswalk import MAX_CROSSWALK_CHARS, SCHEMA, TRANSPORT_SCHEMA, review_crosswalk, review_crosswalk_transport
 from session_spec.source_excerpt import MAX_SOURCE_CHARS, source_excerpt, source_payload
 from session_spec.story_article import validate_article
 from session_spec.story_editor import generate_edition
@@ -137,7 +137,11 @@ class SourceLocalityTests(unittest.TestCase):
             receipt = json.loads((root / "edition-receipt.json").read_bytes())
             self.assertEqual(saved["candidate_sha256"], receipt["candidate_sha256"])
             self.assertEqual(receipt["identity"]["review_crosswalk"], SCHEMA)
-            self.assertIn(json.dumps(review_crosswalk(draft, packet()), ensure_ascii=False), backend.prompts[0])
+            self.assertEqual(receipt["identity"]["review_crosswalk_transport"], TRANSPORT_SCHEMA)
+            transport = review_crosswalk_transport(review_crosswalk(draft, packet()))
+            saved_transport = json.loads((root / "edition-crosswalk-transport-0.json").read_bytes())
+            self.assertEqual(saved_transport, {"candidate_sha256": receipt["candidate_sha256"], **transport})
+            self.assertIn(json.dumps(transport, ensure_ascii=False), backend.prompts[0])
 
 
 if __name__ == "__main__":

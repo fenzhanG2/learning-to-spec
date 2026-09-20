@@ -130,6 +130,8 @@ Each retained Agent rationale receives a separate, source-local review dispositi
 
 Phase citations are not exclusive time ranges: one message can explain a decision and introduce the next phase. Potentially later sources require an explicit temporal adjudication, not an automatic backdating verdict or duplicated aggregate citations. This judgment is still semantic, not a chronology proof.
 
+The editorial citation index deduplicates identical source/claim objects through a small catalog only when its serialized form is smaller. This preserves the existing bounded index, including omissions, roles, offsets and citation scopes; full historical events and the whole edition remain in the review prompt. Private receipts keep both forms. A transport-version change invalidates old editorial cache hits, so an upgrade can require another review. Fewer index characters do not establish lower provider cost or equivalent reviewer quality.
+
 See [output contract](docs/output-contract.md), [privacy threat model and research](docs/privacy-design.md) and [source/license notices](third_party/NOTICES.md). Reference projects are not runtime dependencies.
 
 ## Compatibility
