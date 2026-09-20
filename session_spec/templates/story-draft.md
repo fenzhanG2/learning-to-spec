@@ -62,8 +62,22 @@ article:
   "checks":[{"question":"验收问题","observed":"本次具体观察","limit":"不能外推的部分","refs":["E000002"]}],
   "reader_coverage":[{"question":"读者问题","chapters":["ascii-slug"],"refs":["E000001"]}],
   "human_input_coverage":[{"ref":"E000001","treatment":"在何处回应/合并原因/上下文归类或未决"}],
-  "agent_markdown":"# <task-specific title in the source conversation's language>\n\n<working contract and mechanism map; do not repeat agent_detail.resume>"
+  "agent_markdown":"# <task-specific title in the source conversation's language>\n\n<working contract and mechanism map with actual inline refs such as E000001; do not repeat agent_detail.resume>",
+  "agent_detail":{
+    "schema":"agent-detail/v3",
+    "resume":{"checkpoint":"最后可靠状态","workspace":"已知工作区与缺失前提","next_action":"首个有效动作或已完成无需动作","verification_boundary":"已验收与未验收的界线","refs":["E000001"]},
+    "continuation":[], "recipes":[],
+    "trajectory":[{
+      "id":"phase-one", "title":"真实决策阶段", "human_refs":["E000001"], "summary":"起因与方向变化",
+      "tool_steps":[{"purpose":"该组操作回答的问题","tool_refs":["E000002"],"usage":[{"tool":"ACTUAL_SOURCE_TOOL_NAME","action":"具体对象与操作","refs":["E000002"]}],"finding":"实际观察及边界","decision":"对下一步的影响","refs":["E000002"]}],
+      "rationale":{"basis":"not_recorded","text":"没有独立记录选择理由时，不补造","refs":[]},
+      "tool_refs":["E000002"], "observation":"本阶段净结果", "outcome":"partial", "next_state":"实际留下的状态", "refs":["E000001","E000002"]
+    }],
+    "paths":[{"title":"实际尝试路线","outcome":"partial","phase_ids":["phase-one"],"reason":"成败依据与界线","reuse_condition":"复用前提","refs":["E000002"]}]
+  }
 }
+
+article.agent_detail 是必需对象，不是可选附件。上面的说明文字和 E 编号是结构示例，不是可直接复制的内容；按后附 Actionable Agent handoff 契约填入真实 resume、trajectory、paths，以及有依据的 continuation/recipes。数组数量由源内容决定；不能因为示例为空就省去真实接续要求或可迁移方法，也不能凭空补造工具、引用或决策理由。
 
 chapters/details 可选条目为 {"title":"深入阅读","markdown":"补充说明","refs":["E000002"]}。每个 chapter 必须有有效 refs，id 唯一，不能用 story-brief/story-takeaway。human_input_coverage 只收且完整覆盖带 human_input 的事件，每个 ref 一次；不能把助手列出的选项补成用户选择。重复请求可合并叙述，仍被误标的帮助可在 treatment 中解释为上下文，不升级授权。
 

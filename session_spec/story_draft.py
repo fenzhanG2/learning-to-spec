@@ -26,7 +26,10 @@ def generate_draft(directory, packet, canonical, backend, model=None, language="
     contract += "\n\n" + (PROMPTS / "agent-detail.md").read_text(encoding="utf-8") + language_contract(language)
     editorial = (PROMPTS / "story-editor.md").read_text(encoding="utf-8")
     context = story_context(packet, canonical)
-    identity = digest(("joint-story-draft/v1" + contract + editorial + context + (model or "copilot-default")).encode())
+    prompt = contract + "\n\n发布前将按以下约定复核。这里只把它当写作约束，不执行其审阅输出任务：\n" + editorial
+    prompt += context + "\n\n现在只返回完整初稿 JSON，顶层严格为 article、brief、insights，不返回 issues/checked/summary 或 patches。"
+    prompt += "输出前检查 /article/agent_detail 的完整 agent-detail/v3 结构、每章真实 refs，以及 /article/agent_markdown 工作约定与机制中的行内来源；这些均不可省略。"
+    identity = digest(("joint-story-draft/v2" + prompt + (model or "copilot-default")).encode())
     output, receipt_path = directory / "joint-draft.json", directory / "joint-draft-receipt.json"
     if output.is_file() and receipt_path.is_file():
         receipt = json.loads(receipt_path.read_bytes())
@@ -38,8 +41,6 @@ def generate_draft(directory, packet, canonical, backend, model=None, language="
                 write_json(output, draft)
                 write_json(receipt_path, {**receipt, "output_sha256": file_hash(output), "container_relocations": relocations})
             return draft
-    prompt = contract + "\n\n发布前将按以下约定复核。这里只把它当写作约束，不执行其审阅输出任务：\n" + editorial
-    prompt += context + "\n\n现在只返回完整初稿 JSON，顶层严格为 article、brief、insights，不返回 issues/checked/summary 或 patches。"
     raw_draft = generate_json(backend, prompt, "story-joint-draft", directory)
     write_json(directory / "joint-raw-draft.json", raw_draft)
     draft, relocations = normalize_containers(raw_draft)
