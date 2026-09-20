@@ -98,6 +98,8 @@ def run_story(session, home, destination, from_export=None, model=None, gh_host=
             write_json(marker, source)
             records = [json.loads(line) for line in (base / "evidence.jsonl").read_text(encoding="utf-8").splitlines() if line]
             packet = root_packet(records)
+            if not packet:
+                raise ValueError("Canonical export contains no root events. Select the canonical export, not a rendered story's private support directory; refusing story generation.")
             language_info = resolve_language(packet, language)
             output_language = language_info["language"]
             if len(json.dumps(packet, ensure_ascii=False)) > 800000:
