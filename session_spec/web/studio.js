@@ -1,7 +1,7 @@
 const parameters = new URLSearchParams(location.hash.slice(1));
 const access = parameters.get('access');
 const elements = name => document.getElementById(name);
-const state = { job: null, review: null, choices: {}, manifest: null, plan: null, busy: false, stage: 'source', published: false, generationRetry: false };
+const state = { job: null, review: null, choices: {}, manifest: null, plan: null, busy: false, stage: 'source', published: false, generationRetry: false, connectionError: null, durableJobs: null };
 let planTimer;
 let planSequence = 0;
 function preview(html) {
@@ -10,7 +10,7 @@ function preview(html) {
 const status = (text, error = false) => {
   const diagnostic = String(text || '');
   const authentication = error && /authentication token|bad credentials|authenticate.*copilot|no gh authentication/i.test(diagnostic);
-  elements('status').textContent = authentication
+  elements('status').textContent = error && state.connectionError ? state.connectionError : authentication
     ? 'Copilot could not sign in for generation. Check the configured GitHub host/account, then retry. See technical details below.'
     : error && diagnostic.length > 240 ? 'This step could not finish. See technical details below before retrying.' : diagnostic;
   elements('status').classList.toggle('error', error);
@@ -36,16 +36,36 @@ const node = (tag, text, className) => {
   if (className) element.className = className;
   return element;
 };
+function disconnected() {
+  const identifier = state.job || (/^[a-f0-9]{32}$/.test(parameters.get('job') || '') ? parameters.get('job') : null);
+  const recovery = state.durableJobs === false
+    ? 'Restart the manual Studio command. Manual job IDs cannot be reopened through Copilot; use the saved review/generation paths for recovery.'
+    : state.durableJobs === true ? `Ask Copilot to reopen learning-to-spec${identifier ? ` job ${identifier}` : ' Studio'}.`
+      : `Reopen Studio from Copilot, or restart its manual command.${identifier ? ` Previous job: ${identifier}.` : ''}`;
+  state.connectionError = `Studio connection lost or response incomplete. ${recovery} Check saved status before retrying: an operation may already have started. Unsubmitted choices may need selecting again.`;
+  state.generationRetry = false;
+  invalidatePlan();
+  return new Error(state.connectionError);
+}
+async function localFetch(path, options) {
+  if (state.connectionError) throw new Error(state.connectionError);
+  try { return await fetch(path, options); }
+  catch { throw disconnected(); }
+}
+async function responseBody(response, format) {
+  try { return await response[format](); }
+  catch { throw disconnected(); }
+}
 async function request(path, data) {
-  const response = await fetch(path, { method: data === undefined ? 'GET' : 'POST', headers: { Authorization: `Bearer ${access}`, 'Content-Type': 'application/json' }, body: data === undefined ? undefined : JSON.stringify(data), cache: 'no-store' });
-  const result = await response.json();
+  const response = await localFetch(path, { method: data === undefined ? 'GET' : 'POST', headers: { Authorization: `Bearer ${access}`, 'Content-Type': 'application/json' }, body: data === undefined ? undefined : JSON.stringify(data), cache: 'no-store' });
+  const result = await responseBody(response, 'json');
   if (!response.ok) throw new Error(result.error || `Request failed (${response.status})`);
   return result;
 }
 async function file(name) {
-  const response = await fetch(`/api/file?job=${encodeURIComponent(state.job)}&name=${encodeURIComponent(name)}`, { headers: { Authorization: `Bearer ${access}` }, cache: 'no-store' });
-  if (!response.ok) throw new Error((await response.json()).error || 'File is not available');
-  return response.blob();
+  const response = await localFetch(`/api/file?job=${encodeURIComponent(state.job)}&name=${encodeURIComponent(name)}`, { headers: { Authorization: `Bearer ${access}` }, cache: 'no-store' });
+  if (!response.ok) throw new Error((await responseBody(response, 'json')).error || 'File is not available');
+  return responseBody(response, 'blob');
 }
 function updateControls() {
   const findings = state.review?.findings || [];
@@ -53,15 +73,16 @@ function updateControls() {
     const choice = state.choices[finding.id];
     return !choice?.action || (choice.action === 'generalize' && !choice.replacement?.trim());
   }).length;
-  elements('remaining').textContent = remaining ? `${remaining} still need your choice` : 'Ready to generate';
-  for (const control of document.querySelectorAll('button, input, select, textarea')) control.disabled = state.busy;
-  elements('generate').disabled = !state.review || Boolean(remaining) || state.busy;
+  elements('remaining').textContent = state.connectionError ? 'Reopen Studio to continue' : remaining ? `${remaining} still need your choice` : 'Ready to generate';
+  const unavailable = state.busy || Boolean(state.connectionError);
+  for (const control of document.querySelectorAll('button, input, select, textarea')) control.disabled = unavailable;
+  elements('generate').disabled = !state.review || Boolean(remaining) || unavailable;
   elements('generate').textContent = state.generationRetry ? 'Retry generation →' : 'Generate spec →';
   const unresolved = [...document.querySelectorAll('[data-finding]')].some(control => control.value !== 'keep');
-  elements('publish').disabled = !state.plan || state.busy || unresolved || state.published;
+  elements('publish').disabled = !state.plan || unavailable || unresolved || state.published;
 }
 async function perform(operation) {
-  if (state.busy) return;
+  if (state.busy || state.connectionError) return;
   const previous = state.stage;
   state.busy = true;
   updateControls();
@@ -198,7 +219,7 @@ action('generate', async () => {
     state.generationRetry = false;
     show('output'); status('Saved on your computer. Nothing uploaded.');
   } catch (error) {
-    state.generationRetry = true;
+    state.generationRetry = !state.connectionError;
     throw error;
   }
 });
@@ -370,10 +391,12 @@ async function reopenJob(identifier) {
   }
 }
 elements('saved-jobs').addEventListener('change', () => perform(async () => { await reopenJob(elements('saved-jobs').value); elements('history').open = false; }));
-elements('history').addEventListener('toggle', () => { if (elements('history').open && !state.busy) refreshJobs().catch(error => status(error.message, true)); });
+elements('history').addEventListener('toggle', () => { if (elements('history').open && !state.busy && !state.connectionError) refreshJobs().catch(error => status(error.message, true)); });
 perform(async () => {
   if (!access) throw new Error('Open Studio from Copilot, or use the complete private URL printed by the studio command.');
   const result = await request('/api/sessions');
+  state.durableJobs = typeof result.durable_jobs === 'boolean' ? result.durable_jobs : null;
+  if (state.durableJobs === false) elements('working-description').textContent = 'Keep the manual Studio command running while we work. Closing that process disconnects this page.';
   for (const session of result.sessions) {
     const option = node('option', `${session.title} · ${Math.round(session.bytes / 1024)} KB`);
     option.value = session.id; option.selected = session.id === 'selected' || session.id === parameters.get('session');

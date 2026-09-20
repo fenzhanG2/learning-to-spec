@@ -77,6 +77,8 @@ class FileLease:
 
 
 class DurableStudio(Studio):
+    durable_jobs = True
+
     def __init__(self, home, output, **settings):
         self.state_lock = threading.RLock()
         super().__init__(home, output, **settings)

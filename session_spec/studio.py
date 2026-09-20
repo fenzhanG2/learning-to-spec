@@ -34,6 +34,8 @@ def open_local(path):
 
 
 class Studio:
+    durable_jobs = False
+
     def __init__(self, home, output, session=None, open_generation=None, review_directory=None, **settings):
         self.home = Path(home).resolve()
         self.output = Path(output).resolve()
@@ -274,7 +276,7 @@ def handler_for(studio):
                 query = urllib.parse.parse_qs(parsed.query)
                 if parsed.path == "/api/sessions":
                     self.send(200, {"sessions": [{key: value for key, value in item.items() if key != "path"} for item in studio.sessions],
-                                    "resume_job": studio.resume_job, "resume_choices": studio.resume_choices})
+                                    "resume_job": studio.resume_job, "resume_choices": studio.resume_choices, "durable_jobs": studio.durable_jobs})
                     return
                 if parsed.path == "/api/jobs":
                     self.send(200, {"jobs": [{"id": item["id"], "stage": item["stage"], "status": item["status"], "updated_at": item.get("updated_at", "")}
