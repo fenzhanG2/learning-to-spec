@@ -6,27 +6,50 @@ from .source_excerpt import excerpt_segments, payload_text, source_payload
 from .story_grounding import field_has_quote, pointer_value
 
 
-SCHEMA = "minimization-focus/v1"
+LEGACY_SCHEMA = "minimization-focus/v1"
+SCHEMA = "minimization-focus/v2"
 MAX_FOCUS_CHARS = 32000
 MAX_GROUPS = 32
 MAX_CLAIMS = 8
 MARKER = re.compile(r"\[(?:PRIVATE_DETAIL_\d+|ENTITY_\d+|REDACTED)\]|\[GENERALIZED_DETAIL_\d+:")
 
 
-def minimization_focus(edition, events):
+def marker_role(event):
+    return "human" if event.get("human_input") else event.get("type", "unknown")
+
+
+def marker_priority(candidate, seen, contexts):
+    event, text, markers = candidate
+    novel = markers - seen
+    prefixes = ("[PRIVATE_DETAIL_", "[GENERALIZED_DETAIL_", "[ENTITY_", "[REDACTED]")
+    diversity = tuple(-sum(marker.startswith(prefix) for marker in novel) for prefix in prefixes)
+    unseen_contexts = sum((marker, marker_role(event)) not in contexts for marker in markers)
+    return (*diversity, -unseen_contexts, not bool(event.get("human_input")))
+
+
+def minimization_focus(edition, events, schema=SCHEMA):
+    if schema not in (LEGACY_SCHEMA, SCHEMA):
+        raise ValueError("Unknown minimization focus schema")
     claims = cited_claims(edition)
     marked = [(event, payload_text(source_payload(event))) for event in events]
-    marked = [(event, text) for event, text in marked if MARKER.search(text)]
-    result = {"schema": SCHEMA, "marked_event_count": len(marked), "groups": [], "omitted_groups": 0,
+    marked = [(event, text, set(MARKER.findall(text))) for event, text in marked if MARKER.search(text)]
+    result = {"schema": schema, "marked_event_count": len(marked), "groups": [], "omitted_groups": 0,
               "limit": "Reduced payloads only, never original removed values or reversal maps. Markers locate possible "
                        "privacy transformations or literal technical examples; they do not prove a disclosure category. "
                        "No keyword is forbidden. Inspect the complete edition for unnecessary paraphrases or mentions "
                        "of removed material, including uncited text. Retain technical failures, corrections and necessary "
                        "operating constraints. This bounded index is not a privacy guarantee or an exhaustive detector."}
-    for event, text in marked:
+    if schema == SCHEMA:
+        result["selection"] = ("Cover distinct transformation markers and source roles before repeated occurrences. "
+                               "Removal/generalization/alias markers receive attention before repeated hard-secret markers; "
+                               "this is attention allocation, not a severity rating, identity inference or source chronology.")
+    seen, contexts = set(), set()
+    while marked:
         if len(result["groups"]) >= MAX_GROUPS:
-            result["omitted_groups"] += 1
-            continue
+            result["omitted_groups"] += len(marked)
+            break
+        position = 0 if schema == LEGACY_SCHEMA else min(range(len(marked)), key=lambda index: marker_priority(marked[index], seen, contexts))
+        event, text, markers = marked.pop(position)
         matching = [claim for claim in claims if event["ref"] in claim["refs"]]
         surfaces = {}
         for claim in matching:
@@ -55,6 +78,9 @@ def minimization_focus(edition, events):
         if len(json.dumps(result, ensure_ascii=False)) > MAX_FOCUS_CHARS:
             result["groups"].pop()
             result["omitted_groups"] += 1
+        else:
+            seen.update(markers)
+            contexts.update((marker, marker_role(event)) for marker in markers)
     while len(json.dumps(result, ensure_ascii=False)) > MAX_FOCUS_CHARS and result["groups"]:
         result["groups"].pop()
         result["omitted_groups"] += 1

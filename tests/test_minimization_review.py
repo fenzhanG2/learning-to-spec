@@ -4,7 +4,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from session_spec.minimization_review import MAX_FOCUS_CHARS, MAX_GROUPS, SCHEMA, minimization_focus, validate_minimization
+from session_spec.minimization_review import LEGACY_SCHEMA, MAX_FOCUS_CHARS, MAX_GROUPS, SCHEMA, minimization_focus, validate_minimization
 from session_spec.reduction import digest, transform
 from session_spec.story_article import validate_article
 from session_spec.story_editor import CHECKS, generate_edition, validate_review
@@ -30,6 +30,23 @@ def decision(status="excluded", authored=None):
 
 
 class MinimizationReviewTests(unittest.TestCase):
+    def test_distinct_late_markers_and_roles_are_not_crowded_out_by_repeated_paths(self):
+        events = [{"ref": f"E{index:06d}", "type": "tool.execution_complete", "result": {"content": "path [PRIVATE_DETAIL_1] token [REDACTED]"}} for index in range(1, 90)]
+        events += [{"ref": "E000090", "type": "user.message", "human_input": "Keep the failure. [GENERALIZED_DETAIL_2: approved abstraction]"},
+                   {"ref": "E000091", "type": "user.message", "human_input": "[PRIVATE_DETAIL_3] Preserve technical correction."},
+                   {"ref": "E000092", "type": "tool.execution_complete", "result": {"content": "[PRIVATE_DETAIL_3] Distinct source role."}}]
+        current = minimization_focus({}, events)
+        selected = {group["ref"] for group in current["groups"]}
+        self.assertTrue({"E000090", "E000091", "E000092"} <= selected)
+        legacy = minimization_focus({}, events, LEGACY_SCHEMA)
+        self.assertFalse({"E000090", "E000091", "E000092"} & {group["ref"] for group in legacy["groups"]})
+        self.assertEqual(current["omitted_groups"] + len(current["groups"]), len(events))
+        self.assertLessEqual(len(json.dumps(current, ensure_ascii=False)), MAX_FOCUS_CHARS)
+        self.assertEqual(legacy["groups"][0]["ref"], "E000001")
+        self.assertEqual(legacy["schema"], LEGACY_SCHEMA)
+        with self.assertRaises(ValueError):
+            minimization_focus({}, events, "unknown")
+
     def test_focus_uses_reduced_mixed_sentence_not_original_private_values(self):
         events, private, operations = mixed_source()
         draft = {"article": article(), "brief": brief(), "insights": insights()}
@@ -159,6 +176,24 @@ class MinimizationReviewTests(unittest.TestCase):
             self.assertIn("Supplied category rule for navigation", backend.prompts[1])
             self.assertIn("contract_quote is missing or not literal", backend.prompts[1])
             self.assertNotIn(private, "\n".join(backend.prompts))
+
+    def test_source_grounded_suffix_correction_preserves_the_weaker_recorded_assertion(self):
+        events = packet() + [{"ref": "E000003", "type": "tool.execution_complete", "tool": "Read",
+                              "result": {"content": "assert redact('sample', 0, 0).endswith('sample')"}, "success": True}]
+        draft = {"article": article(), "brief": brief(), "insights": insights()}
+        draft["article"]["chapters"][0]["markdown"] = "空区间时整条消息完全不变。"
+        draft["article"]["chapters"][0]["refs"].append("E000003")
+        issue = {"path": "/article/chapters/0/markdown", "quote": "空区间时整条消息完全不变。", "kind": "source_fact",
+                 "category": "evidence_strength", "reason": "后缀断言允许额外前缀，不能证明整个输出相等。",
+                 "evidence": [{"ref": "E000003", "origin": "tool", "quote": ".endswith('sample')"}]}
+        correction = "此断言只检查输出保留原文本后缀，没有验证整个输出完全相等。"
+        backend = FakeBackend([edition_review([issue]), {"patches": [{"op": "replace", "path": issue["path"], "value": correction}]}, edition_review()])
+        with tempfile.TemporaryDirectory() as temporary:
+            actual = generate_edition(Path(temporary), draft, events, backend, validate_article)
+            self.assertEqual(actual["article"]["chapters"][0]["markdown"], correction)
+            self.assertIn("A test name or an aggregate pass count", backend.prompts[0])
+            self.assertIn("every recipe action against its own applicability", backend.prompts[0])
+            self.assertEqual(events[-1]["result"]["content"], "assert redact('sample', 0, 0).endswith('sample')")
 
 
 if __name__ == "__main__":
