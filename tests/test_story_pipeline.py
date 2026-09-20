@@ -219,6 +219,37 @@ class StorySchemaTests(unittest.TestCase):
         review = edition_review([{"severity": "minor", "reason": "Could be more concise"}])
         self.assertTrue(validate_grounding(review, draft, packet(), ""))
 
+    def test_acceptance_scope_has_a_required_review_and_grounded_repair(self):
+        evidence = packet()
+        evidence[0]["human_input"] += " 仅修改本地入口，不要提交或部署；以后集成前先复核入口。"
+        draft = {"article": article(), "insights": insights(), "brief": brief()}
+        route = draft["article"]["agent_detail"]["continuation"][0]
+        route["done_when"] = "复核入口后必须集成部署才算完成。"
+        field_path = "/article/agent_detail/continuation/0/done_when"
+        review = edition_review([{"path": field_path, "quote": route["done_when"],
+                                  "kind": "human_requirement", "category": "acceptance_scope",
+                                  "reason": "条件性复核不能把用户排除的部署当成必要验收。",
+                                  "evidence": [{"ref": "E000001", "origin": "human", "quote": "不要提交或部署"}]}])
+        self.assertEqual(validate_grounding(review, draft, evidence, ""), [])
+        missing_scope = edition_review()
+        missing_scope["checked"] = [check for check in missing_scope["checked"] if check["category"] != "acceptance_scope"]
+        self.assertTrue(validate_review(missing_scope))
+        self.assertEqual(validate_review(missing_scope, protocol="grounded-findings/v2"), [])
+        self.assertTrue(validate_review(edition_review(), protocol="grounded-findings/v2"))
+        self.assertTrue(validate_review(edition_review(), protocol="unrecognized"))
+        correction = "复核当前入口仍保留原有功能；部署不在本路线范围内。"
+        backend = FakeBackend([review, {"patches": [{"op": "replace", "path": field_path, "value": correction}]}, edition_review()])
+        with tempfile.TemporaryDirectory() as temporary:
+            actual = generate_edition(Path(temporary), draft, evidence, backend, validate_article, language="auto")
+            self.assertEqual(actual["article"]["agent_detail"]["continuation"][0]["done_when"], correction)
+            self.assertEqual(actual["article"]["agent_detail"]["trajectory"], draft["article"]["agent_detail"]["trajectory"])
+            self.assertIn("acceptance_scope", backend.prompts[0])
+            self.assertIn("Specified local checks may suffice", backend.prompts[1])
+            self.assertEqual(len(backend.calls), 3)
+            receipt = json.loads((Path(temporary) / "edition-receipt.json").read_bytes())
+            self.assertEqual(receipt["review_protocol"], "grounded-findings/v3")
+            self.assertEqual(receipt["identity"]["review_protocol"], "grounded-findings/v3")
+
     def test_imported_skill_help_is_not_promoted_to_human_authority(self):
         records = [
             {"ref": "E000001", "origin": "root", "type": "tool.execution_complete", "tool": "Skill", "timestamp": "2026-01-01T00:00:00.100+00:00", "result": {"content": "Launching skill: docs:help"}},

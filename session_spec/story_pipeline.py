@@ -193,7 +193,7 @@ def validate_story(directory):
             errors.extend(validate_edition(edition, packet, validate_article))
             feedback_path = support / "editorial-feedback.json"
             feedback = validate_feedback(json.loads(feedback_path.read_bytes()), packet, report["source_sha256"]) if feedback_path.is_file() else []
-            errors.extend(validate_review(receipt.get("review"), feedback))
+            errors.extend(validate_review(receipt.get("review"), feedback, protocol=receipt.get("review_protocol")))
             if receipt.get("status") != "completed" or receipt.get("review", {}).get("issues") or receipt.get("output_sha256") != file_hash(edition_path):
                 errors.append("Whole-document review does not match the accepted edition")
             if not brief_path.is_file() or edition != {"article": article, "insights": insights, "brief": json.loads(brief_path.read_bytes())}:

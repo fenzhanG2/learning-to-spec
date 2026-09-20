@@ -12,7 +12,8 @@ from .model_io import generate_json
 
 
 EDITION_SCHEMA = "story-edition/v2"
-CHECKS = ("origin_and_goals", "narrative_and_scope", "readability", "evidence_strength", "mechanism", "agent_handoff")
+REVIEW_PROTOCOL = "grounded-findings/v3"
+CHECKS = ("origin_and_goals", "narrative_and_scope", "readability", "evidence_strength", "mechanism", "agent_handoff", "acceptance_scope")
 
 
 def fingerprint(value):
@@ -52,15 +53,18 @@ def validate_feedback(feedback, events, source_sha256):
     return issues
 
 
-def validate_review(review, feedback=None):
+def validate_review(review, feedback=None, protocol=REVIEW_PROTOCOL):
+    if protocol not in (None, "grounded-findings/v2", REVIEW_PROTOCOL):
+        return ["Unknown whole-document review protocol"]
+    required_checks = CHECKS if protocol == REVIEW_PROTOCOL else CHECKS[:-1]
     if not isinstance(review, dict) or not isinstance(review.get("issues"), list):
         return ["Invalid whole-document review"]
     if any(not isinstance(issue, dict) or not isinstance(issue.get("reason"), str) or not issue["reason"].strip() for issue in review["issues"]):
         return ["Invalid whole-document findings"]
     checked = review.get("checked")
     if not isinstance(checked, list) or any(not isinstance(item, dict) or not isinstance(item.get("category"), str) or not isinstance(item.get("note"), str) or not item["note"].strip() for item in checked):
-        return ["Whole-document review must explain all six checks"]
-    if sorted(item["category"] for item in checked) != sorted(CHECKS):
+        return ["Whole-document review must explain every required check"]
+    if sorted(item["category"] for item in checked) != sorted(required_checks):
         return ["Whole-document review coverage incomplete"]
     if feedback:
         resolutions = review.get("feedback_resolution")
@@ -106,7 +110,7 @@ def generate_edition(directory, draft, events, backend, article_validator, model
     structure_contract = (PROMPTS / "story-draft.md").read_text(encoding="utf-8")
     brief_contract = (PROMPTS / "story-brief.md").read_text(encoding="utf-8")
     brief_review = (PROMPTS / "story-brief-review.md").read_text(encoding="utf-8")
-    identity = {"schema": EDITION_SCHEMA, "draft_sha256": fingerprint(draft), "input_sha256": fingerprint(events),
+    identity = {"schema": EDITION_SCHEMA, "review_protocol": REVIEW_PROTOCOL, "draft_sha256": fingerprint(draft), "input_sha256": fingerprint(events),
                 "contract_sha256": digest((contract + brief_contract + brief_review + structure_contract).encode()),
                 "model": model or "copilot-default", "prior_findings_sha256": fingerprint(prior_findings or []),
                 "feedback_sha256": fingerprint(feedback or [])}
@@ -184,7 +188,7 @@ def generate_edition(directory, draft, events, backend, article_validator, model
                 review_fields = "issues/suggestions/checked/summary" + ("/feedback_resolution" if feedback else "")
                 review_prompt = (contract + context + "\n\nCURRENT_EDITION\n" + json.dumps(edition, ensure_ascii=False)
                                  + "\n\nDETERMINISTIC_CHECKS\n[]"
-                                 + f"\n只返回包含 {review_fields} 的审阅 JSON。阻断项必须提供实际稿件原文、来源原文及角色或逐字契约依据；六项检查一次完成。")
+                                 + f"\n只返回包含 {review_fields} 的审阅 JSON。阻断项必须提供实际稿件原文、来源原文及角色或逐字契约依据；全部七项检查一次完成，包括独立的 acceptance_scope 验收范围检查。")
                 review = generate_json(backend, review_prompt, "story-edition-review", directory)
                 write_json(directory / f"edition-review-{attempt}.json", review)
                 review_errors = validate_review(review, feedback)
@@ -213,7 +217,7 @@ def generate_edition(directory, draft, events, backend, article_validator, model
             if not errors:
                 write_json(output, edition)
                 receipt.update(status="completed", output_sha256=digest(output.read_bytes()), review=review,
-                               review_protocol="grounded-findings/v2",
+                               review_protocol=REVIEW_PROTOCOL,
                                calls=backend.calls[first_call:], brief_characters=brief_length(edition["brief"]),
                                route_steps=len(edition["article"]["route"]))
                 write_json(receipt_path, receipt)

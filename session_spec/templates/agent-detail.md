@@ -28,6 +28,8 @@ Resume owns the historical checkpoint, portability and first move. Do not prefix
 
 Unrecorded goal-level acceptance is not the same as an accepted task or a new feature request. When continuation of the original task calls for the missing acceptance, make it the first route after a present-state check, not conditional on another complaint. If runtime/access is missing, mark that route blocked with its prerequisite; do not silently replace it with "wait until the bug returns". A genuinely completed task can have no immediate action. Historical next_state says what actually followed or remained unresolved at that point, never instructions to today's receiving agent that contradict resume/continuation. Check this across the last phase, paths, first move and acceptance.
 
+The actual human commission defines the goal level. Local edits and specified focused tests can be the entire commissioned outcome; do not automatically add integration, commit, deployment or third-party approval as completion requirements. Conversely, local checks do not replace an explicitly requested runtime outcome. A conditional instruction to review before a later integration does not require that integration now. Each continuation done_when ends at that route's authorized goal; keep excluded later stages out of its necessary conditions, even for a proposed route. Missing authorization is a stopping boundary, not unfinished local work.
+
 Tool names alone ("Read, Edit, Bash") are insufficient. Each semantic tool step includes 1–4 `usage` summaries, grouped by meaningful operation rather than invocation. Each summary names the actual tool, the concrete object/entry point and what was done there. For example: Read — locate FAQSection in app/[locale]/page.tsx; Edit — insert the two sections before FAQ while preserving the existing route; Bash — use the targeted Remotion typecheck, not a whole-repo build. The following `finding` explains the actual result and limitations; `decision` explains the consequence. Keep representative commands/flags when they change the outcome, never entire edit payloads or source files. Every usage item must cite actual tool events in that step's tool_refs; do not invent a tool that the historical host did not record.
 
 If the source genuinely omitted a tool name or a uniquely paired request, do not invent one to satisfy the display format. `tool: "unknown"` is allowed only for that source condition: explain the missing identity/pairing in action/finding and preserve the known operation/result at its evidenced scope. Prefer a named representative when one is actually available, or omit a redundant unknown item while keeping its material finding. A reviewer must not require unavailable upstream metadata.
@@ -60,7 +62,7 @@ Use `article.agent_detail` with this shape. Replace placeholder descriptions wit
       "otherwise": "Meaning of mismatch and diagnostic branch or stop/ask condition, not blind continuation.",
       "refs": ["E000001"]
     }],
-    "done_when": "Acceptance at actual user-goal level, not mere exit code, artifact or subset test.",
+    "done_when": "Success at this route's actual commissioned scope. Specified local checks may suffice for a local task; do not require excluded later integration/release. Do not substitute a subset check for a broader explicitly requested outcome.",
     "stop_when": "When to pause or ask because state, scope, access or assumptions differ; preserve evidence.",
     "refs": ["E000001"]
   }],
