@@ -12,7 +12,7 @@ from .model_io import generate_json
 
 
 EDITION_SCHEMA = "story-edition/v2"
-CHECKS = ("origin_and_goals", "narrative_and_scope", "readability", "evidence_strength", "mechanism", "agent_handoff")
+CHECKS = ("origin_and_goals", "narrative_and_scope", "readability", "evidence_strength", "mechanism", "agent_handoff", "acceptance_scope")
 
 
 def fingerprint(value):
@@ -59,7 +59,7 @@ def validate_review(review, feedback=None):
         return ["Invalid whole-document findings"]
     checked = review.get("checked")
     if not isinstance(checked, list) or any(not isinstance(item, dict) or not isinstance(item.get("category"), str) or not isinstance(item.get("note"), str) or not item["note"].strip() for item in checked):
-        return ["Whole-document review must explain all six checks"]
+        return ["Whole-document review must explain every required check"]
     if sorted(item["category"] for item in checked) != sorted(CHECKS):
         return ["Whole-document review coverage incomplete"]
     if feedback:
@@ -184,7 +184,7 @@ def generate_edition(directory, draft, events, backend, article_validator, model
                 review_fields = "issues/suggestions/checked/summary" + ("/feedback_resolution" if feedback else "")
                 review_prompt = (contract + context + "\n\nCURRENT_EDITION\n" + json.dumps(edition, ensure_ascii=False)
                                  + "\n\nDETERMINISTIC_CHECKS\n[]"
-                                 + f"\n只返回包含 {review_fields} 的审阅 JSON。阻断项必须提供实际稿件原文、来源原文及角色或逐字契约依据；六项检查一次完成。")
+                                 + f"\n只返回包含 {review_fields} 的审阅 JSON。阻断项必须提供实际稿件原文、来源原文及角色或逐字契约依据；全部七项检查一次完成，包括独立的 acceptance_scope 验收范围检查。")
                 review = generate_json(backend, review_prompt, "story-edition-review", directory)
                 write_json(directory / f"edition-review-{attempt}.json", review)
                 review_errors = validate_review(review, feedback)
