@@ -9,7 +9,7 @@
 
 - 人读页开头实际渲染的是 `/brief` 八个字段，`article.opening/outcome` 是兼容旧产物的备用导语，有 brief 时不展示。篇幅上限只计 `/brief` 的所有 text；要修篇幅，必须压缩 brief，不能改备用导语交差。
 - 三个根是 `/article`、`/brief`、`/insights`。Agent 在 `/article/agent_markdown`，图与结尾在 `/insights/architecture` 和 `/insights/closing`；issue 给出一个真实 JSON pointer，同类其他位置写进 reason，不拼接多个路径作为 pointer。
-- 本发布器会生成同目录 `human-spec.html`、`agent-spec.md` 以及 `_support/evidence.jsonl`、`_support/source.json` 等证据附件；证据索引用 ref 字段关联。它们是导出器建立的交付入口，不是原会话运行产物，不必出现在历史事件中。Agent 可以引用相对证据路径，但不得将其混同于原工程路径；如果只单独传递 Markdown，证据附件也需一并提供或另行定位。
+- 对外交付仅含用户选择的 `human-spec.html` 和／或 `agent-spec.md`、`evidence.md`。证据索引用 ref 字段关联，由发布器创建，不是历史项目产物，不必在历史事件中出现。`_support/` 属于导出者私有工作区，不在交付包中；若正文指示接收方读取、附送或索取这些导出内部文件，应报出具体位置并修正。不要将历史项目中碰巧同名的真实文件误当导出内部文件。Agent 的关键结论、首步和预期须自足，`evidence.md` 仅供按需核查。
 - 导入会话的角色标签可能有误，human_input 是来源解析线索，不是身份的绝对证明。明确的技能/系统/子代理帮助不能升级成用户诉求；覆盖表允许把疑似误标项解释为“上下文而非授权”，不要同时要求删除覆盖项又要求机械覆盖它。图片标记不等于图片内容，缺图时只能归因引用当时的描述。
 
 ## 七个维度，一次检查完整
