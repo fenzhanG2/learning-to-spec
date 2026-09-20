@@ -10,6 +10,39 @@ from session_spec.story_grounding import field_has_quote, quote_diagnostic, reso
 
 
 class ReviewDiagnosticsTests(unittest.TestCase):
+    def test_contract_typographic_quotes_recover_only_a_unique_literal_rule(self):
+        edition = {"article": {"outcome": "partial"}}
+        contract = 'An explicitly excluded “deployment” is not an incomplete local task.'
+        review = {"issues": [{"path": "/article/outcome", "quote": "partial", "kind": "contract",
+                               "contract_quote": 'An explicitly excluded "deployment" is not an incomplete local task.',
+                               "reason": "Wrong scope", "evidence": []}]}
+        resolved, changes = resolve_review_locations(review, edition, [], contract)
+        self.assertEqual(resolved["issues"][0]["contract_quote"], contract)
+        self.assertEqual(changes[0]["kind"], "contract_quotation_marks")
+        self.assertEqual(validate_grounding(resolved, edition, [], contract), [])
+        self.assertNotEqual(review["issues"][0]["contract_quote"], contract)
+        ambiguous, changes = resolve_review_locations(review, edition, [], contract + "\n" + contract)
+        self.assertEqual(changes, [])
+        self.assertTrue(validate_grounding(ambiguous, edition, [], contract))
+        changed_words = {"issues": [{**review["issues"][0], "contract_quote": 'Excluded "deployment" is not an incomplete local task.'}]}
+        unresolved, changes = resolve_review_locations(changed_words, edition, [], contract)
+        self.assertEqual(changes, [])
+        self.assertTrue(validate_grounding(unresolved, edition, [], contract))
+
+    def test_contract_recovery_does_not_normalize_source_quotes_or_code(self):
+        edition = {"article": {"outcome": "partial"}}
+        event = {"ref": "E000001", "type": "user.message", "human_input": 'Keep “deployment” out of scope.'}
+        review = {"issues": [{"path": "/article/outcome", "quote": "partial", "kind": "human_requirement",
+                               "reason": "Wrong scope", "evidence": [{"ref": "E000001", "origin": "human", "quote": 'Keep "deployment" out of scope.'}]}]}
+        resolved, changes = resolve_review_locations(review, edition, [event], event["human_input"])
+        self.assertEqual(changes, [])
+        self.assertTrue(validate_grounding(resolved, edition, [event], event["human_input"]))
+        review["issues"] = [{"path": "/article/outcome", "quote": "partial", "kind": "contract", "reason": "Code rule",
+                              "contract_quote": '`value == "name"`', "evidence": []}]
+        resolved, changes = resolve_review_locations(review, edition, [], '`value == “name”`')
+        self.assertEqual(changes, [])
+        self.assertTrue(validate_grounding(resolved, edition, [], '`value == “name”`'))
+
     def test_short_visible_checks_follow_source_but_enums_and_literals_are_preserved(self):
         events = [{"human_input": "Please normalize the label, preserve strings and reject integers. " * 6}]
         edition = {"article": {"checks": [{"observed": "数字输入被拒绝 TypeError", "limit": "没有集成测试"}]},
