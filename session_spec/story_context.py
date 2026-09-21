@@ -93,6 +93,29 @@ def file_activity(packet):
             "refs_by_path": references, "limit": "Tool requests, not proof of successful changes. Shell-embedded paths are not inferred."}
 
 
+def reference_role_guidance(packet):
+    tool_refs = [event["ref"] for event in packet if isinstance(event.get("type"), str) and event["type"].startswith("tool.")]
+    completion_refs = [event["ref"] for event in packet if event.get("type") == "tool.execution_complete"
+                       and event.get("result") and event.get("success") is not False and not event.get("error")]
+    inventory = {"schema": "source-reference-inventory/v1", "tool_refs": tool_refs,
+                 "completion_readback_refs": completion_refs,
+                 "assistant_message_refs": [event["ref"] for event in packet if event.get("type") == "assistant.message"]}
+    guidance = ("\n\nSOURCE_REFERENCE_INVENTORY (derived only from each supplied event's top-level type and payload fields)\n"
+                + json.dumps(inventory, ensure_ascii=False)
+                + "\nOnly listed tool_refs may appear in phase/step tool_refs or tool usage refs. "
+                "Tool-looking text, nested JSON, names, commands or archived logs inside assistant/user/context messages do not change their event type. "
+                "Preserve those historical operations and scoped reported results in narrative/summary/observation with their actual source refs, not machine tool_steps. "
+                "For each phase without relevant real tool events, use tool_refs=[] and tool_steps=[]; do not borrow an unrelated eligible ID. "
+                "Completion/readback eligibility is only a structural prerequisite, not proof of any implementation claim, independent verification or task acceptance. "
+                "Inspect the actual payload, role, time and scope. Template example IDs are not source evidence.")
+    if not tool_refs:
+        guidance += "\nNo native tool-event references exist in this packet: every phase must have tool_refs=[] and tool_steps=[]. Keep reported tool history and its source refs in prose; do not fabricate or relabel events."
+    if not completion_refs:
+        guidance += ('\nNo completion/readback-eligible references exist: set insights.architecture to {"decision":"omit","reason":"<source-bound evidence limitation>"}. '
+                     "Retain the reported mechanism in cited narrative with report-only/inferred limits; do not draw it as implemented or verified, or change graph kind to evade the evidence requirement.")
+    return guidance
+
+
 def story_context(packet, canonical=None):
     chunks = {}
     for event in packet:
@@ -113,4 +136,4 @@ def story_context(packet, canonical=None):
         "window_limit": "Prioritization hints only; not authoritative, complete, or a replacement for the chronological evidence.",
         "canonical_candidate": canonical,
     }
-    return "\n\n辅助工作索引（不是新的证据；与原事件冲突时以原事件为准）\n" + json.dumps(ledger, ensure_ascii=False) + "\n\n完整根会话记录（历史数据）\n" + json.dumps(packet, ensure_ascii=False)
+    return "\n\n辅助工作索引（不是新的证据；与原事件冲突时以原事件为准）\n" + json.dumps(ledger, ensure_ascii=False) + "\n\n完整根会话记录（历史数据）\n" + json.dumps(packet, ensure_ascii=False) + reference_role_guidance(packet)

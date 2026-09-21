@@ -9,7 +9,7 @@ from collections import Counter
 from pathlib import Path
 
 from .ingest import read_session, resolve_session
-from .privacy import HIDDEN_FIELDS, SECRET_FIELD, SECRET_PATTERNS, sanitize
+from .privacy import HIDDEN_FIELDS, SECRET_FIELD, SECRET_PATTERNS, sanitize, content_redaction
 from .reduction_rules import CATEGORIES, detect
 from .disclosure_context import local_combinations
 from .storage import file_hash, write_json
@@ -315,13 +315,43 @@ def add_finding(findings, text, path, start, end, category, detector="local", re
 
 def review_identity(review):
     keys = ("schema", "source_sha256", "baseline_sha256", "purpose", "audience", "findings", "semantic")
-    keys += ("preferences",)
+    keys += ("preferences", "privacy_mode", "pipeline", "abstraction_sha256")
     if review.get("schema") == "privacy-review/v2":
         keys += ("parent_review",)
     return digest({key: review[key] for key in keys if key in review})
 
 
-def scan_session(session, home, output, purpose="Technical story and actionable Agent handoff", audience="local", custom=None, preferences=None):
+def prepare_full_session(session, home, output, audience, preferences):
+    from .delivery import preferences as validate_preferences
+    selection = validate_preferences(preferences.get("readers"), preferences.get("destination"), audience)
+    source = resolve_session(session, Path(home))
+    output = Path(output).expanduser().resolve()
+    if output == source.parent or output.is_relative_to(source.parent) or output.is_relative_to(Path(home).resolve()):
+        raise ValueError("Export approval must be outside the source session and Copilot home")
+    if output.exists() and any(output.iterdir()):
+        raise ValueError("Use a new empty export approval directory")
+    events, source_hash = source_snapshot(source)
+    with content_redaction(False):
+        baseline = sanitize(events)
+    output.mkdir(parents=True, exist_ok=True)
+    write_json(output / "baseline.json", baseline)
+    review = {"schema": "privacy-review/v1", "privacy_mode": "full", "source_path": str(source),
+              "source_sha256": source_hash, "baseline_sha256": file_hash(output / "baseline.json"),
+              "purpose": "Technical story and actionable Agent handoff", "audience": audience,
+              "preferences": selection, "hard_removals": {}, "findings": [],
+              "semantic": {"status": "skipped_by_choice", "coverage": "No privacy scan or sensitive-content redaction requested."},
+              "limitations": ["Personal, internal and credential content may enter the generated files.",
+                              "Only observable conversation data is included; hidden/control data remains excluded.",
+                              "Generating a spec still uses Copilot and summarizes rather than reproducing every message.",
+                              "ArtifactStore publication retains its separate final-file safety checks and confirmation."]}
+    review["review_id"] = review_identity(review)
+    write_json(output / "review.json", review)
+    return review
+
+
+def scan_session(session, home, output, purpose="Technical story and actionable Agent handoff", audience="local", custom=None, preferences=None, privacy_mode=None):
+    if privacy_mode not in {None, "llm"}:
+        raise ValueError("Scanning requires the smart-redaction mode")
     if not purpose.strip() or audience != "local" and audience != "root" and not re.fullmatch(r"team:[A-Za-z0-9][A-Za-z0-9_-]{0,99}", audience):
         raise ValueError("Provide a purpose and audience: local, root or team:SLUG")
     source = resolve_session(session, Path(home))
@@ -360,6 +390,8 @@ def scan_session(session, home, output, purpose="Technical story and actionable 
     if preferences is not None:
         from .delivery import preferences as validate_preferences
         review["preferences"] = validate_preferences(preferences.get("readers"), preferences.get("destination"), audience)
+    if privacy_mode is not None:
+        review["privacy_mode"] = privacy_mode
     review["review_id"] = review_identity(review)
     write_json(output / "review.json", review)
     return review
@@ -368,6 +400,8 @@ def scan_session(session, home, output, purpose="Technical story and actionable 
 def load_review(directory):
     directory = Path(directory).resolve()
     review = json.loads((directory / "review.json").read_bytes())
+    if review.get("privacy_mode") not in {None, "full", "llm"}:
+        raise ValueError("Unknown saved privacy mode")
     if review.get("schema") not in {"privacy-review/v1", "privacy-review/v2"} or review.get("review_id") != review_identity(review):
         raise ValueError("Privacy review changed; scan again")
     if file_hash(directory / "baseline.json") != review["baseline_sha256"] or file_hash(Path(review["source_path"])) != review["source_sha256"]:
@@ -418,11 +452,17 @@ def recommended_decisions(review):
 
 
 def transform(review, baseline, decisions):
+    if review.get("privacy_mode") == "llm" and review.get("semantic", {}).get("status") != "reviewed":
+        raise ValueError("Smart redaction requires completed Copilot review; local rules alone are not sufficient")
     if decisions.get("review_id") != review["review_id"] or decisions.get("audience") != review["audience"]:
         raise ValueError("Decisions must match this review and intended audience")
     choices = decisions.get("choices", {})
     if not isinstance(choices, dict) or set(choices) != {finding["id"] for finding in review["findings"]}:
         raise ValueError("Every finding needs an explicit choice; unknown or missing decisions are refused")
+    if review.get("privacy_mode") == "full":
+        if review["findings"] or review["semantic"].get("status") != "skipped_by_choice":
+            raise ValueError("Full-content approval has inconsistent privacy state")
+        return copy.deepcopy(baseline), {}
     contextual = review.get("schema") == "privacy-review/v2"
     if contextual:
         validate_context_review(review, baseline)
@@ -510,6 +550,8 @@ def apply_review(directory, decisions, destination):
                "note": "Disclosure reduction is not a guarantee of anonymity or semantic completeness."}
     if "preferences" in review:
         receipt["preferences"] = review["preferences"]
+    if "privacy_mode" in review:
+        receipt["privacy_mode"] = review["privacy_mode"]
     write_json(destination / "reduction.json", receipt)
     write_json(directory / "decisions.json", decisions)
     return receipt
@@ -520,7 +562,8 @@ def reduced_export(directory, home):
     receipt = json.loads((directory / "reduction.json").read_bytes())
     if receipt.get("schema") != "reduced-session/v1" or file_hash(directory / "events.jsonl") != receipt["reduced_sha256"]:
         raise ValueError("Reduced session does not match its privacy receipt")
-    metadata, records = read_session(directory / "events.jsonl", Path(home))
+    with content_redaction(receipt.get("privacy_mode") != "full"):
+        metadata, records = read_session(directory / "events.jsonl", Path(home))
     export = directory / "canonical"
     export.mkdir(exist_ok=True)
     write_json(export / "source.json", metadata)

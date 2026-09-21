@@ -1,9 +1,24 @@
 import hashlib
 import json
+import stat
 from pathlib import Path
 
 
 PROMPTS = Path(__file__).resolve().parent / "templates"
+
+
+def unlinked_path(value):
+    path = Path(value).absolute()
+    for part in (path, *path.parents):
+        try:
+            metadata = part.lstat()
+        except FileNotFoundError:
+            continue
+        attributes = getattr(metadata, "st_file_attributes", 0)
+        tag = getattr(metadata, "st_reparse_tag", 0)
+        if stat.S_ISLNK(metadata.st_mode) or (attributes & 0x400 and (not tag or tag & 0x20000000)):
+            raise ValueError("Linked abstraction or review paths are not supported")
+    return path.resolve()
 
 
 def digest(content):

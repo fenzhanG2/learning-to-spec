@@ -8,6 +8,7 @@ from .patching import apply_data_patches
 from .story_brief import MAX_BRIEF_CHARS, MAX_TEXT_CHARS, validate_brief
 from .story_insights import validate_insights
 from .story_grounding import complete_reference_pairs, resolve_review_locations, validate_grounding
+from .story_context import reference_role_guidance
 from .storage import PROMPTS, digest, write_json
 from .language import language_contract, source_language_reference, validate_language
 from .model_io import generate_json
@@ -191,6 +192,7 @@ def generate_edition(directory, draft, events, backend, article_validator, model
     contract = (PROMPTS / "story-editor.md").read_text(encoding="utf-8")
     contract += "\n\n" + (PROMPTS / "story-editor-method.md").read_text(encoding="utf-8")
     contract += "\n\n" + (PROMPTS / "agent-detail.md").read_text(encoding="utf-8")
+    contract += reference_role_guidance(events)
     if language:
         contract += language_contract(language)
     structure_contract = (PROMPTS / "story-draft.md").read_text(encoding="utf-8")

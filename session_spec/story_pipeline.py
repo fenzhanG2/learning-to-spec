@@ -5,7 +5,7 @@ import subprocess
 import tempfile
 from pathlib import Path
 
-from .backend import CopilotBackend
+from .backend import CopilotBackend, run_preparation_process
 from .locking import export_lock
 from .ingest import resolve_session
 from .pipeline import run_export, write_json
@@ -49,7 +49,7 @@ def render_story(support, target):
     node = shutil.which("node")
     if not node:
         raise ValueError("Node.js is required for local HTML/SVG rendering")
-    result = subprocess.run([node, str(renderer_entry()), str(support), str(target)], capture_output=True, text=True, encoding="utf-8", timeout=60)
+    result = run_preparation_process([node, str(renderer_entry()), str(support), str(target)], capture_output=True, text=True, encoding="utf-8", timeout=60)
     if result.returncode:
         raise ValueError("Story renderer failed; verify Node.js and the installed plugin. Source-only checkouts need npm ci --ignore-scripts and npm run build. " + result.stderr[-1200:])
 
@@ -178,6 +178,10 @@ def run_story(session, home, destination, from_export=None, model=None, gh_host=
 def validate_story(directory):
     directory = Path(directory).resolve()
     support = directory / "_support"
+    if (support / "privacy-transform.json").exists():
+        from .abstract_privacy import validate_abstract_story
+
+        return validate_abstract_story(directory)
     report = json.loads((support / "story-report.json").read_text(encoding="utf-8"))
     article = json.loads((support / "article.json").read_text(encoding="utf-8"))
     insights = json.loads((support / "insights.json").read_text(encoding="utf-8"))

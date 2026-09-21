@@ -28,7 +28,28 @@ class ReleaseTests(unittest.TestCase):
         self.assertEqual(entry['name'], manifest['name'])
         self.assertEqual(entry['version'], manifest['version'])
         self.assertEqual(json.loads((root / '.plugin/plugin.json').read_bytes())['version'], manifest['version'])
-        self.assertTrue((root / entry['source'] / 'skills/learning-to-spec/SKILL.md').is_file())
+        self.assertEqual(manifest['extensions'], ['./extensions/'])
+        self.assertEqual(manifest['skills'], [])
+        self.assertEqual(manifest['mcpServers'], {})
+        self.assertFalse((root / 'mcp.json').exists())
+        self.assertFalse((root / '.mcp.json').exists())
+        self.assertFalse(list((root / 'skills').rglob('SKILL.md')))
+        self.assertFalse((root / entry['source'] / 'skills/learning-to-spec/SKILL.md').is_file())
+
+    def test_codex_metadata_is_inert_and_versions_match(self):
+        root = SCRIPT.parents[1]
+        native = json.loads((root / 'plugin.json').read_bytes())
+        compatibility = json.loads((root / '.codex-plugin/plugin.json').read_bytes())
+        self.assertEqual(compatibility['name'], native['name'])
+        self.assertEqual(compatibility['version'], native['version'])
+        for component in ('skills', 'mcpServers', 'apps', 'hooks', 'extensions'):
+            self.assertNotIn(component, compatibility)
+        self.assertEqual(compatibility['interface']['capabilities'], [])
+        self.assertEqual(compatibility['interface']['defaultPrompt'], [])
+        self.assertIn('Copilot', compatibility['description'])
+        self.assertIn('not Codex', compatibility['description'])
+        self.assertEqual(json.loads((root / 'package.json').read_bytes())['version'], native['version'])
+        self.assertIn(f'version = "{native["version"]}"', (root / 'pyproject.toml').read_text(encoding='utf-8'))
 
     @unittest.skipUnless(shutil.which('node'), 'Node.js is needed for renderer integration')
     def test_release_renders_without_npm_or_node_modules(self):
@@ -40,8 +61,20 @@ class ReleaseTests(unittest.TestCase):
                 archive.extractall(root / 'installed')
             plugin = root / 'installed/plugins/learning-to-spec'
             self.assertFalse((plugin / 'node_modules').exists())
-            self.assertTrue((plugin / 'mcp.json').is_file())
-            self.assertTrue((plugin / '.mcp.json').is_file())
+            for name in ('extension.mjs', 'bridge.mjs', 'workflow.mjs'):
+                self.assertTrue((plugin / 'extensions/learning-to-spec' / name).is_file())
+            self.assertTrue((plugin / 'scripts/native_bridge.py').is_file())
+            self.assertFalse((plugin / 'mcp.json').exists())
+            self.assertFalse((plugin / '.mcp.json').exists())
+            self.assertTrue((plugin / 'docs/legacy/copilot-mcp.json').is_file())
+            self.assertTrue((plugin / 'docs/legacy/claude-mcp.json').is_file())
+            self.assertFalse((plugin / 'skills').exists())
+            self.assertTrue((plugin / 'docs/legacy/skills/learning-to-spec/SKILL.md').is_file())
+            compatibility = json.loads((plugin / '.codex-plugin/plugin.json').read_bytes())
+            self.assertNotIn('mcpServers', compatibility)
+            self.assertNotIn('skills', compatibility)
+            for name in ('native-output.js', 'native-output.html', 'native-output.css'):
+                self.assertTrue((plugin / 'session_spec/web' / name).is_file())
             protocol = subprocess.run([sys.executable, str(plugin / 'scripts/plugin_mcp.py')],
                 input='{"jsonrpc":"2.0","id":1,"method":"initialize"}\n{"jsonrpc":"2.0","id":2,"method":"tools/list"}\n',
                 cwd=root, capture_output=True, text=True, encoding='utf-8', timeout=30)
@@ -85,7 +118,7 @@ class ReleaseTests(unittest.TestCase):
             plugin = root / "plugin"
             plugin.mkdir()
             (plugin / "plugin.json").write_text(json.dumps({"name": "learning-to-spec", "version": "0.3.0", "description": "Test"}))
-            for name in ("session_spec/main.py", "skills/learning-to-spec/SKILL.md", "reviews/private.json", "source/events.jsonl", "session_spec/__pycache__/main.pyc", "node_modules/sample/index.js"):
+            for name in ("session_spec/main.py", "docs/legacy/skills/learning-to-spec/SKILL.md", "skills/learning-to-spec/SKILL.md", "mcp.json", ".mcp.json", "reviews/private.json", "source/events.jsonl", "session_spec/__pycache__/main.pyc", "node_modules/sample/index.js"):
                 target = plugin / name
                 target.parent.mkdir(parents=True, exist_ok=True)
                 target.write_text("fixture")
@@ -94,7 +127,9 @@ class ReleaseTests(unittest.TestCase):
             with zipfile.ZipFile(result["release"]) as archive:
                 names = archive.namelist()
                 self.assertIn(".github/plugin/marketplace.json", names)
-                self.assertIn("plugins/learning-to-spec/skills/learning-to-spec/SKILL.md", names)
+                self.assertIn("plugins/learning-to-spec/docs/legacy/skills/learning-to-spec/SKILL.md", names)
+                for stale in ('skills/learning-to-spec/SKILL.md', 'mcp.json', '.mcp.json'):
+                    self.assertNotIn('plugins/learning-to-spec/' + stale, names)
                 self.assertFalse(any(part in name for name in names for part in ("reviews", "source/", "__pycache__", "node_modules")))
                 manifest = json.loads(archive.read("release-manifest.json"))
                 self.assertEqual(len(manifest["files"]), 3)

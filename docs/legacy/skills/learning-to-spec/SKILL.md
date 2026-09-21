@@ -40,6 +40,6 @@ Ambiguous/interrupted uploads must **not** be retried, overwritten, deleted or m
 
 ## Explicit manual fallback
 
-If native integration fails, explain that limitation first. The Python CLI and Studio remain supported alternatives, not proof of native integration. Resolve the plugin root exactly two directories above this skill; never recursively search the computer. Requirements: Python 3.10+, Node 18+, bundled renderer, no npm installation. Never bypass host access denials. See `../../docs/native-runtime.md`, `../../docs/privacy-design.md` and `../../README.md` for architecture, privacy and CLI commands.
+This is the explicit legacy MCP integration, not the Copilot /to-spec extension. If integration fails, explain that limitation first. The Python CLI and Studio remain supported alternatives, not proof of native App integration. Resolve the plugin root exactly four directories above this skill; never recursively search the computer. Requirements: Python 3.10+, Node 18+, bundled renderer, no npm installation. Never bypass host access denials. See `../../../../docs/native-runtime.md`, `../../../../docs/privacy-design.md` and `../../../../README.md` for architecture, privacy and CLI commands.
 
 Fix quality in the generation pipeline, never hand-patch final documents. Source-bound editorial feedback, revision and presentation-only refresh are documented in README. No reference project is loaded at runtime. Follow source language naturally unless the user requests translation.

@@ -58,6 +58,18 @@ def present_review(review, baseline=None):
         slots = {f"S{number}": (path, text) for number, (path, text) in enumerate(strings(baseline), 1)}
         for original, finding in zip(review["findings"], visible["findings"]):
             finding["recommended"] = suggested_action(original)
+            summary = assessment_summary(original)
+            if "scope" in original and summary.get("status") == "agreement":
+                necessity = original.get("necessity")
+                if summary.get("necessities") == [necessity]:
+                    if necessity == "necessary":
+                        finding["recommended"] = "keep"
+                    elif necessity == "unnecessary":
+                        categories = set(original.get("categories", [original.get("category")]))
+                        if categories and categories <= {"identifier", "environment"}:
+                            finding["recommended"] = "pseudonymize"
+                        elif categories and categories <= {"personal_life", "reputation", "health", "financial"}:
+                            finding["recommended"] = "remove"
             finding["contexts"] = []
             for occurrence in finding["occurrences"][:3]:
                 text = at_path(baseline, occurrence["path"])

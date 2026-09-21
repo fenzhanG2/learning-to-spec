@@ -6,6 +6,8 @@ from .agent_transfer import render_transfer, validate_transfer
 from .agent_evidence import validate_usage
 
 OUTCOMES = {"verified", "partial", "failed", "abandoned", "unresolved"}
+CHRONOLOGY_POLICY = "first-cited-phase-involvement/v1"
+ANCHORED_CHRONOLOGY_POLICY = "explicit-phase-entry/v1"
 
 
 def validate_agent_detail(detail, events):
@@ -29,6 +31,7 @@ def validate_agent_detail(detail, events):
     tool_refs = {ref for ref, event in evidence.items() if event.get("type", "").startswith("tool.")}
     positions = {event["ref"]: index for index, event in enumerate(events)}
     previous = -1
+    previous_phase = None
     for phase_index, phase in enumerate(phases):
         if not isinstance(phase, dict):
             errors.append("Agent phase must be an object")
@@ -43,14 +46,38 @@ def validate_agent_detail(detail, events):
                 errors.append("Missing Agent phase field: " + field)
         if phase.get("outcome") not in OUTCOMES:
             errors.append("Invalid Agent phase outcome")
-        anchors = refs(phase.get("refs"), "phase")
+        phase_references = {
+            "refs": refs(phase.get("refs"), "phase"),
+            "human_refs": refs(phase.get("human_refs"), "phase human_refs", human_refs, False),
+            "tool_refs": refs(phase.get("tool_refs"), "phase " + str(identifier) + " tool_refs (must be real tool events, not assistant reports)", tool_refs, False),
+        }
+        covered.update(phase_references["human_refs"])
+        anchors = list(dict.fromkeys(ref for values in phase_references.values() for ref in values))
+        if "entry_ref" in phase:
+            entry = phase["entry_ref"]
+            if not isinstance(entry, str) or entry not in anchors:
+                errors.append(f"/article/agent_detail/trajectory/{phase_index}/entry_ref must name a real event already cited by this phase; never invent an anchor or use an unrelated event")
+                anchors = []
+            else:
+                anchors = [entry]
         if anchors:
-            start = min(positions[ref] for ref in anchors)
+            earliest = min(anchors, key=lambda ref: positions[ref])
+            start = positions[earliest]
+            location = f"/article/agent_detail/trajectory/{phase_index}"
             if start < previous:
-                errors.append("Agent trajectory must follow source chronology; do not repeat old opening refs on later phases. Phase=" + str(identifier) + "; earliest supplied ref=" + min(anchors, key=lambda ref: positions[ref]) + "; previous phase starts at source position=" + str(previous))
+                policy = ANCHORED_CHRONOLOGY_POLICY if "entry_ref" in phase or previous_phase.get("explicit_entry") else CHRONOLOGY_POLICY
+                errors.append("Agent trajectory must follow source chronology (" + policy + "). Current " + location + " (phase=" + str(identifier)
+                              + ") references=" + json.dumps(phase_references) + "; earliest=" + earliest + " at source position=" + str(start)
+                              + ". Previous " + previous_phase["path"] + " (phase=" + str(previous_phase["id"])
+                              + ") references=" + json.dumps(previous_phase["references"]) + "; earliest=" + previous_phase["earliest"]
+                              + " at source position=" + str(previous)
+                              + ". Positions are zero-based source-list order. An explicit entry_ref identifies this phase's actual entry event; earlier/later supporting refs are not entry anchors. Without entry_ref, legacy chronology uses the validated union of each phase's refs, human_refs and tool_refs; rationale and global refs are not anchors. "
+                                "This checks first-cited involvement, not actual initiation, causality or disjoint phase intervals. Overlapping topics and equal minima are allowed. "
+                                "Inspect BOTH phases and their source-grounded order; supporting or closing evidence does not have to precede the next topic. "
+                                "Retain legitimate facts, refs and user coverage; do not delete evidence or add unrelated anchors to force the check. "
+                                "Sorting a refs array cannot change its minimum. Validation changed no refs or phases.")
             previous = start
-        covered.update(refs(phase.get("human_refs"), "phase human_refs", human_refs, False))
-        refs(phase.get("tool_refs"), "phase " + str(identifier) + " tool_refs (must be real tool events, not assistant reports)", tool_refs, False)
+            previous_phase = {"path": location, "id": identifier, "references": phase_references, "earliest": earliest, "explicit_entry": "entry_ref" in phase}
         rationale = phase.get("rationale")
         if not isinstance(rationale, dict) or rationale.get("basis") not in {"recorded", "inferred", "not_recorded"} or not isinstance(rationale.get("text"), str) or (rationale["basis"] != "not_recorded" and not rationale["text"].strip()):
             errors.append(f"/article/agent_detail/trajectory/{phase_index}/rationale needs basis recorded/inferred/not_recorded; recorded/inferred require nonempty text and real refs. not_recorded may use text='' and refs=[] and is omitted from the v3 reader view.")

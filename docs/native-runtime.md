@@ -1,4 +1,6 @@
-# Native plugin runtime
+# Legacy MCP / Studio runtime
+
+This guide describes the explicit pre-0.7 MCP integration, not the current native Copilot extension. For install-only `/to-spec`, native privacy forms and the read-only output canvas, see [the native extension](native-extension.md). Legacy configurations and the historical skill are archived under [docs/legacy](legacy/README.md); they are not auto-discovered by the current package.
 
 ```text
 Copilot App / CLI
@@ -13,9 +15,9 @@ Copilot App / CLI
             └─ final-byte approval → live destination plan → upload → readback
 ```
 
-## Native integration
+## Explicit legacy integration
 
-The portable `mcp.json` follows [Agent Plugins 1.0](https://agent-plugins.org/schemas/1.0.0/mcp.schema.json); `.mcp.json` provides legacy integration. The host expands plugin-root variables. The Node launcher selects installed Python ≥3.10 without downloading dependencies. MCP is a protocol adapter, not a shell-command prompt; generation logs never enter its stdout.
+The archived example `docs/legacy/copilot-mcp.json` follows [Agent Plugins 1.0](https://agent-plugins.org/schemas/1.0.0/mcp.schema.json); `docs/legacy/claude-mcp.json` retains the previous compatibility configuration. These examples are deliberately outside automatic discovery paths and are not registered by the metadata-only Codex manifest. Copilot uses the `/to-spec` extension, not these legacy tools or the legacy skill. An explicit integration must supply the appropriate plugin-root expansion for its host. The Node launcher selects installed Python ≥3.10 without downloading dependencies. MCP is a protocol adapter, not a shell-command prompt; generation logs never enter its stdout.
 
 The background service starts lazily. `~/.learning-to-spec/runtime/<profile-hash>` stores private state outside the installation directory, scoped to the resolved Copilot home so different profiles cannot share jobs, inherited authentication or approvals. `LEARNING_TO_SPEC_HOME` explicitly overrides this root for tests. Existing local config supplies optional model, GitHub host and call budget. OS file leases serialize startup and prevent competing writers. The service binds only `127.0.0.1`, checks Host/Origin/capability, refuses cross-origin requests and never follows redirects with its capability.
 

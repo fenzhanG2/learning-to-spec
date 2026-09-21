@@ -15,7 +15,7 @@ from pathlib import Path
 from .artifacts import ArtifactClient, destination_plan, publish_package
 from .ingest import list_sessions, resolve_session
 from .private_cli import generate_private
-from .reduction import digest, load_review, scan_session, transform
+from .reduction import digest, load_review, scan_session, transform, prepare_full_session
 from .reduction_semantic import semantic_review
 from .privacy_presentation import present_review
 from .share_package import approve_package, load_package, prepare_package
@@ -142,10 +142,18 @@ class Studio:
             return {"teams": result.get("teams", []) if isinstance(result, dict) else result}
         if path == "/api/scan":
             selection = preferences(data.get("readers"), data.get("delivery"), data.get("audience"))
-            if data.get("detection") not in {"local", "copilot"}:
+            privacy_mode = data.get("privacy_mode")
+            if privacy_mode not in {None, "full", "llm"}:
+                raise ValueError("Choose no redaction or smart redaction")
+            if privacy_mode == "full":
+                if data.get("detection") != "none" or data.get("semantic") is not False:
+                    raise ValueError("No-redaction mode must explicitly skip privacy scanning")
+            elif data.get("detection") not in {"local", "copilot"}:
                 raise ValueError("Explicitly choose local detection or a contextual Copilot review")
             if (data.get("detection") == "copilot") != (data.get("semantic") is True):
                 raise ValueError("Contextual Copilot review requires separate disclosure consent")
+            if privacy_mode == "llm" and data.get("semantic") is not True:
+                raise ValueError("Smart redaction requires both local rules and Copilot review")
             source = next((item for item in self.sessions if item["id"] == data.get("session")), None)
             if not source:
                 raise ValueError("Select one of the listed sessions")
@@ -155,8 +163,12 @@ class Studio:
             self.jobs[identifier] = job
 
             def scan():
-                review = scan_session(source["path"], self.home, job["directory"] / "review", audience=data.get("audience", "local"),
-                                      purpose=data.get("purpose", "Technical story and actionable Agent handoff"), custom=data.get("custom", []), preferences=selection)
+                if privacy_mode == "full":
+                    review = prepare_full_session(source["path"], self.home, job["directory"] / "review", data["audience"], selection)
+                else:
+                    review = scan_session(source["path"], self.home, job["directory"] / "review", audience=data.get("audience", "local"),
+                                          purpose=data.get("purpose", "Technical story and actionable Agent handoff"), custom=data.get("custom", []),
+                                          preferences=selection, privacy_mode=privacy_mode)
                 if data.get("semantic") is True:
                     review = semantic_review(job["directory"] / "review", consent=True, **self.settings)
                 return {"findings": len(review["findings"]), "review_id": review["review_id"]}

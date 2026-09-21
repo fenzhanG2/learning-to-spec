@@ -2,7 +2,7 @@
 
 Turn a GitHub Copilot session into a readable engineering story, an actionable Agent handoff, or both — with explicit privacy and delivery choices.
 
-**A native workflow plugin, not only a skill:** 12 typed MCP tools, persistent local jobs, a private approval UI, source-grounded generation/review, selected-file delivery and verified ArtifactStore publishing. The skill only guides conversation. [Architecture and recovery](docs/native-runtime.md).
+**A native session extension:** the plugin registers `/to-spec` and a no-argument `learning_to_spec` tool, not a Skill or prompt template. The extension binds to the current Copilot session, uses native forms in both App and CLI, and runs source-grounded generation, privacy review and delivery. App versions that route slash text through the model can invoke the native tool instead; command interception is host-dependent. A read-only App canvas shows progress, then the selected downloads. No session path, copied extension code, or external browser is required. [Native extension architecture](docs/native-extension.md).
 
 ## Choose before generating
 
@@ -10,14 +10,14 @@ The plugin asks you to choose, rather than treating defaults as permission:
 
 1. **Reader:** Human HTML, Agent Markdown, or both. Agent output has a separate `evidence.md`; there is no Agent HTML viewer.
 2. **Delivery:** local files / one downloadable ZIP, or ArtifactStore. ArtifactStore additionally requires a root or team audience and a final upload confirmation.
-3. **Privacy review:** local rules or an optional contextual Copilot review. You choose keep, remove, pseudonymize or generalize for each finding, including potentially uncomfortable asides.
-4. **Final confirmation:** inspect the chosen transformations before generation and the exact selected files before any upload.
+3. **Privacy:** **No redaction**, or **Smart redaction (rules + Copilot)**. The defaults are Both, local files and Smart redaction; you must explicitly accept them. Both modes first abstract the session into a private draft. Smart mode then combines deterministic rules with contextual LLM review; incomplete review blocks export rather than falling back to rules alone.
+4. **Final confirmation:** accept or customize the proposed privacy plan, then export the saved draft. Any upload needs a separate confirmation of the exact selected files and audience.
 
-Recognized credentials, hidden reasoning and binary payloads are always excluded. Contextual findings never receive a bulk deletion recommendation. Technical failures, corrections and acceptance boundaries are not embarrassing details to erase.
+No redaction can leave personal details, internal information and credentials in local output; it generates a spec, not a verbatim transcript. Smart redaction removes recognized credentials and proposes one bounded plan for contextual findings, including uncomfortable asides. Accept it in one step or customize scope-specific keep/remove/pseudonymize/generalize choices; findings without safe bound defaults still need individual choices. Technical failures, corrections and acceptance boundaries are not embarrassing details to erase. Hidden reasoning, control/UI data and binary payloads remain outside the observable source in both modes. ArtifactStore still applies separate final-file secret checks and explicit upload confirmation, even with No redaction.
 
 ## Install in Copilot App or CLI
 
-Requirements: Python 3.10+, Node.js 18+, and an authenticated GitHub Copilot CLI. Rendering dependencies are bundled: installing a published plugin does not require npm or a manual clone. ArtifactStore is an optional Microsoft-tenant service and additionally needs an authorized Azure CLI sign-in; local export works without it.
+Requirements: a Copilot version supporting plugin-shipped extensions and native canvases or elicitation, Python 3.10+, Node.js 18+, and authenticated Copilot CLI generation. Extension APIs are currently experimental upstream; a host or organization policy that disables them cannot be bypassed by installing this plugin. Rendering dependencies are bundled: no npm, source edits, extension scaffolding or manual clone is needed. ArtifactStore additionally needs authorized Azure CLI access; local export works without it.
 
 ### 1. Install
 
@@ -35,22 +35,25 @@ In Copilot App, open **Customize → Installed** to confirm the plugin is enable
 
 ### 2. Export a session
 
-Start a new Copilot conversation in **Interactive** mode and ask:
+Stay in the conversation you want to export, in **Interactive** mode, and enter:
 
 ```text
-Use learning-to-spec to export my session about [topic].
-Ask me which readers, privacy transformations and delivery I want.
+/to-spec
 ```
 
-You can supply a session UUID or an absolute `events.jsonl` path instead of a topic. The plugin lists local candidates if needed; it must not guess which session you meant. It then asks for Human / Agent / Both, local files / ArtifactStore, and local / contextual privacy detection. Inspect individual findings and confirm the changes before generation. Choosing local files does not disable Copilot model calls or quota usage.
+Or ask **“export spec”** / **“导出 spec”**: Copilot can call the extension's no-argument `learning_to_spec` tool. The SDK supplies the current-session identity and observable events; no most-recent-session guess, directory scan or user-supplied path is used. A frozen snapshot prevents later export interactions from changing the reviewed input. Hidden/control data is excluded. Both modes retain observable source content privately for abstraction; Smart redaction runs after drafting, not before capture. Snapshots and intermediate drafts can contain sensitive values and must remain private.
 
-The native `open_studio` tool opens a private browser without returning its capability to the model. The Studio has three steps: **Choose → Protect → Use & share**. Choose readers and delivery, decide what to do with flagged details, then click **Generate spec**. No duplicate save action or “I reviewed” checkbox. Advanced writing/contextual-review settings are folded away; local detection is the default. Contextual Copilot review still requires an explicit selection explaining what leaves the device. Keep the Copilot session active during work: hosts may terminate plugin processes on exit or idle shutdown, even with the App window open. If disconnected, ask Copilot to reopen the exact job shown in Studio and check its saved status before retrying. Saved jobs/checkpoints survive restarts; no operation is automatically replayed. Use the manual Studio fallback for a longer review independent of host cleanup. Download only selected files/ZIP: `human-spec.html`, `agent-spec.md`, `evidence.md`. Keep Markdown files together so citations resolve. Never share the private workspace or Studio capability.
+Both **Copilot App and CLI** use native forms: choose readers, delivery and one of the two privacy modes, review any flagged details, then generate. These privacy choices determine what may enter the exported files, not whether the conversation already exists in Copilot. Private findings go to the user interface, not the model's tool result. Smart review and spec generation use Copilot quota, even with local delivery. Nothing uploads automatically. Keep the host conversation active while work runs. Finished App exports open in a read-only native side panel; it has no generation, privacy-approval or upload authority. Download the selected `human-spec.html`, `agent-spec.md`, `evidence.md` and ZIP; keep the Markdown files together.
 
-Completed exports are staged as verified, generation-bound snapshots in this tab. Ready downloads remain available after a disconnection; edits, generation and uploads do not. Reloading or changing choices discards the snapshots. Size/time limits and recovery details are under **Local files & download help**.
+Automatic processing has a **five-minute limit**, excluding time spent answering forms. The usual path makes two backend model calls, with at most one repair call. The plugin respects the host's active model when available; it does not require a fixed named model. The App panel updates every three seconds with the current stage and elapsed processing time, and tells you when it is waiting for your choices. Timeouts stop the attempt with a clear status rather than restarting silently. Longer timeout does not mean faster generation or guarantee completion.
+
+The finished App panel verifies each selected file against its saved SHA-256 before enabling its download. Verified downloads remain available in panel memory after a disconnection; incomplete or changed files do not. Closing or reloading the panel discards that memory. Fetching has a shared 30-second deadline, an 8 MiB per-file limit and a 24 MiB aggregate payload limit; browser overhead is additional. Use the saved local paths for unavailable files. **About this export** explains the read-only boundary. The panel cannot edit, generate, approve or upload, online or offline; a download request is not proof that the host saved a file.
+
+The Human preview is a display-only projection: renderer styles remain visible, but its empty iframe sandbox and preview-specific policy disable scripts, forms and network content. Non-fragment links are disabled with guidance to the selected download buttons above; within-document navigation remains available. This projection never changes the downloaded HTML, Markdown, ZIP or their saved hashes.
 
 New Agent exports keep complete selected sanitized payloads in the separate Evidence file, including uniquely paired tool requests/results; the Agent itself stays a trajectory, not a raw tool log. This does not recover upstream truncation or redactions. The fresh-reader check rejects a rendered pair above 240,000 characters instead of silently dropping evidence or approving an unreviewed pair. Older exports retain their recorded rendering policy.
 
-For ArtifactStore, **Upload to ArtifactStore** prepares the selected files and checks the destination without writing remotely or granting approval. The final **Upload** action explicitly approves the current bytes, individually accepted residual disclosures and displayed audience. Approval records the publish action, not an invented claim that the user read every file. Changed bytes or permissions invalidate the plan. There is no automatic upload and no repeat-write button after an upload attempt.
+For ArtifactStore, native forms collect the audience and propose an anonymous unique URL name, then show the exact selected files and remaining flagged details in one final upload confirmation. Preparing a package or checking the destination does not authorize an upload. Approval records the publish action, not an invented claim that the user read every file. Changed bytes or permissions invalidate the plan. There is no automatic upload; the read-only output panel has no upload control.
 
 ### 3. Update or troubleshoot
 
@@ -58,17 +61,19 @@ For ArtifactStore, **Upload to ArtifactStore** prepares the selected files and c
 copilot plugin update learning-to-spec@learning-to-spec
 ```
 
-Restart your Copilot session after installing or updating. If CLI lists the plugin but the running App still reports `Skill not found`, do not assume it loaded: retry after restarting the App when other active work can safely stop. A new conversation or switching Customize tabs may not refresh the App's plugin registry. Autopilot mode may report that the user is unavailable to answer; use Interactive mode for native questions, or the Studio's explicit-choice UI.
+Restart your Copilot session after installation or update. Confirm `/to-spec` appears in command completion and the extension is running in the host's extension manager. Merely seeing a skill is not success. Existing App processes may need a restart; preserve other active work. Use Interactive mode for human privacy decisions. Unsupported hosts receive an explicit compatibility error, not a silent browser fallback.
 
-Before updating or uninstalling, finish jobs and call the plugin's `shutdown` tool. The launcher leaves the install directory and Studio uses its private runtime directory as its working directory, reducing one Windows file-lock cause. Keep custom runtime state outside the installation. This does not resolve every host-held handle or access-denied error. If removal still fails, close the relevant Copilot session/App when other work can safely stop and retry the official command; do not change permissions or remove an active installation by force. Hosts can still end idle plugin processes.
+Before updating or uninstalling, finish jobs and close the relevant Copilot session. Runtime state stays outside the installation. If Windows reports a file in use, close the App when safe and retry the official plugin command; do not change ACLs or force-remove an active installation. Hosts can still end idle plugin processes.
 
-Ask Copilot to call `health`. A visible skill without native tools is not a successful full-plugin installation. If prerequisites fail, bundled `scripts/doctor.py` checks Python, Node, CLI and renderer integrity without model calls. Authentication is checked during generation. No npm/manual clone is required. Use `python3` if that is your installed Python command.
+If prerequisites fail, bundled `scripts/doctor.py` checks Python, Node, CLI and renderer integrity without model calls. Authentication is checked during generation. No npm or manual clone is required. [Legacy MCP and manual Studio](docs/legacy/README.md) remain explicit integrations, not the native Copilot entry point. The Codex manifest is metadata only: it registers no tools or skills and does not provide `/to-spec` in Codex.
 
-Copilot App and CLI share the plugin/skill format. Native App plugin recognition and the explicit-choice gate have been tested separately from CLI generation; this is not a claim that every App version or policy configuration behaves identically. ArtifactStore requires separate, authorized Microsoft Azure CLI access; a personal GitHub account alone does not grant it. Local export does not need Azure.
+Copilot App and CLI load the extension from the installed plugin; neither needs separately installed user extension files. ArtifactStore requires separate authorized Microsoft Azure access. Compatibility and observed native E2E results must be checked for the host version; historical MCP/Studio tests are not proof of this new extension path.
 
 For a development checkout only, use `copilot --plugin-dir "/absolute/path/to/learning-to-spec"`. The public repository is independent of the proposed playground submission; there is no requirement to add the private playground marketplace.
 
-## Private review Studio
+## Legacy manual Studio
+
+This browser workflow is separate from the 0.7 native extension. Its session picker, saved-job controls and **Local files & download help** are not controls in the native output panel. Using Studio is optional and explicit, not a prerequisite for `/to-spec`.
 
 ```text
 python scripts/session_spec.py studio --session "SESSION_UUID_OR_EVENTS_JSONL"
@@ -78,18 +83,18 @@ Open the private localhost URL printed by the command. The three-step Studio gui
 
 “Local” means no ArtifactStore publication, not offline model inference. Local privacy rules make no model calls; optional contextual review sends pre-masked context to Copilot with consent. Generation sends the approved reduced session to Copilot and uses your quota.
 
-## Terminal workflow
+## Explicit terminal workflow
 
 After the user explicitly chooses a Human-only local file:
 
 ```text
-python scripts/session_spec.py privacy-scan SESSION --out PRIVATE_REVIEW --readers human --delivery local --audience local
+python scripts/session_spec.py privacy-scan SESSION --out PRIVATE_REVIEW --readers human --delivery local --audience local --allow-copilot-review
 python scripts/session_spec.py privacy-choose PRIVATE_REVIEW --out DECISIONS_JSON
 python scripts/session_spec.py private-story PRIVATE_REVIEW --decisions DECISIONS_JSON --out PRIVATE_OUTPUT --confirm-choices
 python scripts/session_spec.py validate-story PRIVATE_OUTPUT/story
 ```
 
-Use `--readers agent` or `--readers both` only for that user choice. Add `--allow-copilot-review` to scanning only after consent. `--redact "exact phrase"` flags an additional concern. `privacy-choose` prompts for each action; `--recommended` is for explicitly accepted available suggestions, not authorization to decide unresolved personal findings.
+Use `--readers agent` or `--readers both` only for that user choice. `--allow-copilot-review` explicitly permits private abstraction of the observable session followed by rules-plus-Copilot review of the draft; use it only after consent. It is not a local-only scan. `--redact "exact phrase"` flags an additional concern. `privacy-choose` prompts for each action; `--recommended` is for explicitly accepted available suggestions, not authorization to decide unresolved personal findings.
 
 The delivered folder is `PRIVATE_OUTPUT/deliverables/`. `PRIVATE_OUTPUT/deliverables.zip` contains exactly those selected files. A joint working draft and validation evidence remain in the private `story/` workspace to preserve consistent source-grounded review; do not share the entire workspace. CLI result paths and Studio downloads point only to selected deliverables.
 
@@ -128,7 +133,7 @@ This command performs read-only remote requests and rechecks file names, content
 
 ## Pipeline and boundaries
 
-Read-only snapshot → local hard-secret removal → optional contextual suggestions → exact-span user choices → reduced Copilot events → shared draft → source-grounded editorial review/repairs → selected deliverables → optional final-file approval and upload.
+Current-session snapshot → explicit privacy mode → either unchanged observable content, or local rules + required contextual LLM review + exact-span user choices → approved Copilot events → shared draft → source-grounded editorial review/repairs → selected deliverables → optional final-file approval and upload. The advanced legacy Studio/terminal interfaces retain their separately documented manual controls; they are not the native two-choice form.
 
 Human stories explain the original problem, meaningful goals/boundaries, causal trajectory, implementation architecture when supported, outcomes and transferable lessons. Agent handoffs prioritize the current state, first useful action, conditional continuation, tools used inline, successful/failed paths and verification boundaries. Sources resolve to the separate evidence file. Neither output reconstructs hidden reasoning or replays historical commands.
 
@@ -146,17 +151,20 @@ See [output contract](docs/output-contract.md), [privacy threat model and resear
 
 This project was previously named Copilot Session Spec. New local state defaults to `~/.learning-to-spec/`; configuration falls back to `~/.copilot-session-spec/config.json` when the new config is absent. Existing sessions and old outputs are not moved. Historical schema IDs such as `copilot-session-spec/v1` remain stable for compatibility. The internal Python package/entry script remains `session_spec` / `scripts/session_spec.py`.
 
-If App can open Studio but generation reports authentication failure, first check the configured GitHub host rather than repeatedly signing in. The App account and the generation CLI's selected host can differ, including an inherited legacy `gh_host`. To deliberately use an existing github.com `gh` login, set `"gh_host": "github.com"` in `~/.learning-to-spec/config.json` (preserve any other settings), or pass `--gh-host github.com` to the CLI. For Enterprise, choose that authorized host instead. No tokens belong in this file. Finish active jobs and use the native `shutdown` tool before restarting the runtime so it reads the new selection. Reopen the same job and explicitly retry; privacy decisions and failed attempts remain. Studio keeps full local diagnostics under **Technical details**; authentication is never retried or changed automatically.
+If native forms work but generation reports authentication failure, first check the configured GitHub host rather than repeatedly signing in. The App account and the generation CLI's selected host can differ, including an inherited legacy `gh_host`. To deliberately use an existing github.com `gh` login, set `"gh_host": "github.com"` in `~/.learning-to-spec/config.json` (preserve any other settings), or pass `--gh-host github.com` to the explicit terminal workflow. For Enterprise, choose that authorized host instead. No tokens belong in this file. Finish active jobs before restarting the relevant Copilot session so the extension reads the new selection. Native `/to-spec` has no `shutdown` tool or Recent work/session-picker UI; do not invoke historical MCP tools as native recovery steps. Private receipts retain failed attempts. Legacy Studio recovery and its **Technical details** panel are documented separately in [the legacy runtime guide](docs/native-runtime.md). Authentication is never retried or changed automatically.
 
 Direct `story`, `export`, `refresh-story` and `validate` commands remain for explicitly requested legacy workflows; they do not establish privacy approval or permission to upload.
 
 ## Development
+
+Follow the [ordered testing gates](docs/testing-gates.md): offline contracts first, then actual Copilot CLI generation/privacy/export on an isolated public or synthetic fixture, and only then native App acceptance. Do not use an App demo to discover CLI argument, schema or rendering failures. Mock passes are not real-provider or semantic-quality passes.
 
 ```text
 npm ci --ignore-scripts
 npm run build
 python -m unittest discover -s tests -v
 node --check session_spec/web/studio.js
+node --test tests/native_extension.mjs tests/native_output.cjs tests/native_bridge_integration.mjs
 npm audit --omit=dev --audit-level=moderate
 ```
 

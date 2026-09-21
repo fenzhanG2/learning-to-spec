@@ -6,8 +6,8 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-DIRECTORIES = {".plugin", ".codex-plugin", "docs", "scripts", "session_spec", "skills", "third_party"}
-ROOT_FILES = {"plugin.json", "mcp.json", ".mcp.json", "agency.json", "README.md", "pyproject.toml", "package.json", "package-lock.json"}
+DIRECTORIES = {".plugin", ".codex-plugin", "docs", "extensions", "scripts", "session_spec", "third_party"}
+ROOT_FILES = {"plugin.json", "agency.json", "README.md", "pyproject.toml", "package.json", "package-lock.json"}
 
 
 def build(destination, dependencies=False):

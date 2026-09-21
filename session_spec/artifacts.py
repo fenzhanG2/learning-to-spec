@@ -95,17 +95,29 @@ class ArtifactError(ValueError):
         super().__init__(f"ArtifactStore returned HTTP {status}; no automatic write retry was performed")
 
 
+class ArtifactAuthError(ValueError):
+    pass
+
+
+class ArtifactNameError(ValueError):
+    pass
+
+
+class ArtifactExistsError(ValueError):
+    pass
+
+
 class ArtifactClient:
     def __init__(self, token=None):
         if token is None:
             executable = shutil.which("az")
             if not executable:
-                raise ValueError("Azure CLI is required for upload. Install it and authenticate to your Microsoft tenant; do not paste tokens into the plugin.")
+                raise ArtifactAuthError("Azure CLI is required for upload. Install it and authenticate to your Microsoft tenant; do not paste tokens into the plugin.")
             result = subprocess.run([executable, "account", "get-access-token", "--resource", RESOURCE, "--query", "accessToken", "-o", "tsv"],
                                     capture_output=True, text=True, encoding="utf-8", timeout=60,
                                     creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0)
             if result.returncode or not result.stdout.strip():
-                raise ValueError("Azure CLI could not acquire an ArtifactStore token. Complete normal Azure sign-in/consent, then retry. Credentials and provider output are not logged.")
+                raise ArtifactAuthError("Azure CLI could not acquire an ArtifactStore token. Complete normal Azure sign-in/consent, then retry. Credentials and provider output are not logged.")
             token = result.stdout.strip()
         self.token = token
         self.opener = urllib.request.build_opener(NoRedirect())
@@ -140,7 +152,7 @@ class ArtifactClient:
 
 def destination_plan(directory, site, client, *, preview=False):
     if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]{0,99}", site):
-        raise ValueError("Site name must start with a letter/number and contain only letters, numbers, underscores or hyphens")
+        raise ArtifactNameError("Site name must start with a letter/number and contain only letters, numbers, underscores or hyphens")
     manifest, archive = package_preview(directory) if preview else package_bytes(directory)
     audience = manifest["audience"]
     team = audience[5:] if audience.startswith("team:") else None
@@ -150,7 +162,7 @@ def destination_plan(directory, site, client, *, preview=False):
         if error.status != 404:
             raise
     else:
-        raise ValueError("An artifact with this name already exists. Automatic overwrite is disabled; choose a new name.")
+        raise ArtifactExistsError("An artifact with this name already exists. Automatic overwrite is disabled; choose a new name.")
     policy = PRIVATE
     if team:
         details = client.request("GET", "/api/teams/" + urllib.parse.quote(team, safe=""))
