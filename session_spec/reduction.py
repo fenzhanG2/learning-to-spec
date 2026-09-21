@@ -11,6 +11,7 @@ from pathlib import Path
 from .ingest import read_session, resolve_session
 from .privacy import HIDDEN_FIELDS, SECRET_FIELD, SECRET_PATTERNS, sanitize
 from .reduction_rules import CATEGORIES, detect
+from .disclosure_context import local_combinations
 from .storage import file_hash, write_json
 
 
@@ -165,12 +166,19 @@ def scan_session(session, home, output, purpose="Technical story and actionable 
                 raise ValueError("Additional redactions must contain at least two characters")
             for match in re.finditer(re.escape(phrase), text):
                 add_finding(findings, text, path, *match.span(), "custom")
+    user_fields = [(f"S{number}", path, text) for number, (path, text) in enumerate(strings(baseline), 1)
+                   if baseline[path[0]].get("type") == "user.message" and path[1:] in {("data", "content"), ("data", "text")}]
+    for clue in local_combinations(user_fields):
+        text = at_path(baseline, clue["path"])
+        add_finding(findings, text, clue["path"], clue["start"], clue["end"], "inference",
+                    detector="local-combination", necessity="uncertain", related=clue["related"],
+                    reason="Personal context from different turns may be linkable when combined. Review these clues together for this audience; no identity or private attribute was inferred. Up to twelve related fields are shown; this heuristic is not exhaustive.")
     output.mkdir(parents=True, exist_ok=True)
     write_json(output / "baseline.json", baseline)
     review = {"schema": "privacy-review/v1", "source_path": str(source), "source_sha256": source_hash,
               "baseline_sha256": file_hash(output / "baseline.json"), "purpose": purpose.strip(), "audience": audience,
               "hard_removals": dict(counts), "findings": list(findings.values()),
-              "semantic": {"status": "not_run", "coverage": "Local heuristics only; contextual and inferred disclosures may be missed."},
+              "semantic": {"status": "not_run", "coverage": "Local direct-pattern and cross-turn personal-context heuristics only; unrecognized, quoted, third-party or semantic combinations may still be missed. No identity inference or automatic contextual removal."},
               "limitations": ["Not an anonymization or compliance guarantee.", "Review text is private local data; never upload this directory.", "Technical failures and acceptance boundaries must remain in the handoff."]}
     if preferences is not None:
         from .delivery import preferences as validate_preferences

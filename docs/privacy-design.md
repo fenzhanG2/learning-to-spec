@@ -91,3 +91,8 @@ Implementation design also draws on Presidio's recognizer/operator separation, G
 ## Testing boundaries
 
 Synthetic SWE-chat injections must use invented, nonfunctional credentials and invented people. Evaluate direct leakage, encoded/repeated copies, indirect self-disclosure, cross-turn composition and technical negative controls separately. Verify all shipped files, including Evidence; a clean Human page with a leaking attachment is a failure. Report model-review failures and preservation failures, not just successful cases. Never equate finite synthetic coverage with real-world recall.
+# Cross-turn local review
+
+Local review also links first-person workplace, location, schedule, affiliation and household clues across different user turns when more than one facet is present. These are uncertain, source-linked suggestions, not inferred identities or proven disclosures; each still requires an individual decision. Quoted/fenced examples and non-user tool output are excluded from this particular heuristic. It is intentionally incomplete: third-party, paraphrased and other semantic combinations can escape it. Contextual review remains opt-in, not silently enabled.
+
+Common English/Chinese clause boundaries separate a private aside from a following technical preservation instruction. This is a narrow heuristic, not a language parser or guarantee. Inspect exact spans before applying changes. Do not remove technical failures, corrections, negations or acceptance conditions to make a story look better. New unseen fixtures must measure detection, over-proposal and technical preservation separately from user-selected removals.

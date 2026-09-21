@@ -4,6 +4,8 @@ Optimize for the receiving agent's next correct decision, not an impressive retr
 
 ## Three reading paths
 
+Before prescribing a consequential behavior, separate the user's explicit requirement, the observed implementation, and an unresolved design choice. For collections or filters, determine whether the source actually specifies any versus all, missing versus empty values, mixed matching/nonmatching inputs, and side effects on rejection. Do not infer these semantics from a name, a successful single-item example or an unexecuted proposal. When the recorded task depends on a choice that the source cannot settle, put that concrete ambiguity in the existing resume/continuation text and make the next move inspect the governing contract or ask for clarification before editing. Describe proposed discriminating tests as future checks, not historical outcomes or new user requirements. Do not manufacture an ambiguity checklist for unrelated tasks. Preserve the same condition in the short resume, detailed route and reusable recipe.
+
 1. Resume: last known workspace, active goal, established facts, unresolved acceptance, first useful move. A completed task can have no immediate action; do not fabricate work.
 2. Continue or transfer: concrete conditional procedures, expected observations, mismatch branches, stop conditions and adaptation points. Future instructions are not evidence they were performed.
 3. Explain: a decision trajectory, not a tool transcript. Connect meaningful actions, findings, decisions and state changes. Name tools inline only when they help explain a turning point. Preserve consequential mistakes, corrections and failed routes, not every invocation or retry.

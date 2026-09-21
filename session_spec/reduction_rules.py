@@ -26,6 +26,10 @@ PATTERNS = [
 
 PERSONAL_CUE = re.compile(r"\b(?:I|I'm|I've|my|me|my wife|my husband|my partner|our customer|my colleague)\b|我|本人|私[はの]|自分", re.I)
 SENTENCES = re.compile(r".+?(?:[;。！？；\n]|[.!?](?=\s|$)|$)")
+TECHNICAL_BOUNDARY = re.compile(
+    r"[,，]?\s+(?:but|and|so|however)\s+(?=(?:please\s+)?(?:keep|preserve|retain|do not|don't|never|fix|test|verify|ensure|leave|avoid)\b)"
+    r"|[,，](?=\s*(?:please\s+)?(?:keep|preserve|retain|do not|don't|never|fix|test|verify|ensure|leave|avoid)\b)"
+    r"|[，,](?:但|不过|所以|而且)?(?=请|保留|不要|禁止|确保|修复|验证)", re.I)
 CONTEXT_RULES = {
     "health": re.compile(r"\b(?:diagnos\w*|chemotherapy|therapist|antidepressant\w*|bipolar|HIV|cancer|pregnan\w*|miscarriage|medical appointment|psychiatr\w*|oncology|fertility clinic)\b|确诊|抑郁症|化疗|流产|精神科|癌症|妊娠|不妊|通院", re.I),
     "financial": re.compile(r"\b(?:salary|annual income|personal debt|bank balance|credit card debt|bankrupt\w*|mortgage arrears)\b|工资|个人负债|银行卡余额|破产|借金|年収", re.I),
@@ -33,6 +37,11 @@ CONTEXT_RULES = {
     "reputation": re.compile(r"\b(?:I'm (?:an idiot|stupid|incompetent)|I am (?:an idiot|stupid|incompetent)|embarrass\w*|ashamed|don't tell (?:my|the) (?:boss|manager)|do not tell (?:my|the) (?:boss|manager)|(?:my|the) (?:boss|manager|coworker|colleague) (?:is|was) (?:an idiot|incompetent|useless)|I (?:hate|despise) my (?:job|boss|team)|I have no idea what I'm doing)\b|我太蠢|我真笨|丢脸|羞耻|别告诉.{0,8}(?:老板|经理)|老板.{0,6}(?:蠢|无能)|恥ずかしい|上司に.{0,8}言わない", re.I),
     "confidential": re.compile(r"\b(?:confidential (?:customer|client|project|deal)|unannounced (?:acquisition|layoff|product)|(?:customer|client) (?:secret|private) data|performance improvement plan|HR investigation|do not share outside)\b|客户机密|保密项目|尚未公布|绩效改进|人事调查|社外秘", re.I),
 }
+
+
+def private_clause_end(text, start, end):
+    boundary = TECHNICAL_BOUNDARY.search(text, start, end)
+    return boundary.start() if boundary else end
 
 
 def luhn_valid(value):
@@ -63,5 +72,7 @@ def detect(text):
                     found.extend((sentence.start() + match.start(), sentence.start() + match.end(), category) for match in pattern.finditer(value))
                 else:
                     start = sentence.start() + len(value) - len(value.lstrip())
-                    found.append((start, sentence.end(), category))
+                    end = private_clause_end(text, start, sentence.end())
+                    if pattern.search(text[start:end]):
+                        found.append((start, end, category))
     return found
