@@ -124,15 +124,18 @@ function invalidatePlan() {
 function renderFindings() {
   const review = state.review;
   elements('findings').replaceChildren();
+  const contextual = review.semantic?.status === 'reviewed';
   elements('review-summary').textContent = review.findings.length
     ? `${review.findings.length} details to consider. Choose what belongs in your spec.`
-    : 'No additional details were flagged. You can generate, or add a phrase in setup.';
+    : contextual
+      ? 'Contextual review flagged no additional details. This does not establish that sharing is safe; indirect disclosures can still be missed.'
+      : 'Local checks flagged no additional details. Indirect personal disclosures may still be present. For deeper review, change Privacy scan in setup.';
   elements('review-toolbar').hidden = review.findings.length < 2;
   elements('scan-details').textContent = `${Object.values(review.hard_removals || {}).reduce((sum, value) => sum + value, 0)} automatic removal matches/fields (overlaps possible). Contextual review: ${review.semantic?.status || 'not requested'}. ${review.semantic?.coverage || ''}`;
   const visible = review.findings.filter(finding => elements('filter').value !== 'unresolved' || !state.choices[finding.id]?.action);
   if (!visible.length) {
     const empty = node('div', undefined, 'empty');
-    empty.append(node('strong', review.findings.length ? 'All details have a choice' : 'Ready for the next step'), node('p', 'The technical story stays intact. No anonymity guarantee.', 'hint'));
+    empty.append(node('strong', review.findings.length ? 'All details have a choice' : 'No findings is not a privacy clearance'), node('p', 'Check that your choices preserve technical failures, corrections and constraints. Detection is not an anonymity guarantee.', 'hint'));
     elements('findings').append(empty);
   }
   for (const finding of visible) {

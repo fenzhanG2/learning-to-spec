@@ -138,3 +138,6 @@ Agent 版必须先有文档标题与会话末接手摘要，再展开历史轨�
 探针不是事实裁判，其意见与外部读者反馈分开标识，送入完整来源审阅。每条都要裁决为 fixed、not_applicable 或 needs_fix，并给出当前稿件原文以及真实来源/角色或契约原文；误报、越界功能建议不能直接触发改稿。真实未解决的问题仍需成为已验证来源的阻断意见。修复检查 Human/Agent 的所有对应说法，不能只修一个视图。
 
 首轮探针后不再逐轮重复探针；修订稿由来源审阅器核查，不能宣称最终稿通过了第二次独立接手或实际执行。内部回执保存探针收到的双文件快照、候选/来源/契约/渲染哈希、逐条裁决、原始无效回复与真实调用费用。缓存按合并后的有效反馈校验，而非只数外部意见。探针和一次引用纠正均计入已有调用预算，不增加修复轮数、权限或依赖；预算耗尽仍不发布未审阅产物。逐字引用校验只证明引用存在，不证明裁决在语义上正确。
+# Tool-mediated user answers
+
+The source reader recognizes complete `AskUserQuestion` answer envelopes in imported Copilot-format sessions, in addition to native `ask_user` responses. Only exact answer text and distinct user notes become human feedback; the assistant's question and its premises remain tool/request data. Failed, truncated, malformed, non-root and unrelated tool responses are not promoted. Ambiguous escaped text remains in the original tool evidence rather than being reconstructed. Recognition establishes historical attribution, never new authorization to execute a command or publish data.

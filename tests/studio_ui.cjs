@@ -72,6 +72,20 @@ test('one generate action approves chosen details; unresolved rewrites block it'
   assert.equal(example.calls.some(call => ['/api/choices', '/api/approve', '/api/publish'].includes(call.route)), false);
 });
 
+test('empty local and contextual scans never claim privacy clearance', async () => {
+  for (const mode of ['not_run', 'reviewed']) {
+    const example = await fixture();
+    example.responses['/api/review?job=synthetic'].findings = [];
+    example.responses['/api/review?job=synthetic'].semantic = { status: mode };
+    await example.click('scan');
+    assert.match(example.elements['review-summary'].textContent, mode === 'reviewed' ? /does not establish/ : /Indirect personal disclosures/);
+    const empty = example.elements.findings.children[0];
+    assert.equal(empty.children[0].textContent, 'No findings is not a privacy clearance');
+    assert.match(empty.children[1].textContent, /preserve technical failures/);
+    assert.equal(example.calls.some(call => call.route === '/api/generate'), false);
+  }
+});
+
 test('generation failure restores the privacy screen and supports explicit retry', async () => {
   const example = await fixture();
   await example.click('scan');
