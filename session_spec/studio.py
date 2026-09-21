@@ -15,8 +15,9 @@ from pathlib import Path
 from .artifacts import ArtifactClient, destination_plan, publish_package
 from .ingest import list_sessions, resolve_session
 from .private_cli import generate_private
-from .reduction import at_path, digest, load_review, scan_session, strings, suggested_action, transform
+from .reduction import digest, load_review, scan_session, transform
 from .reduction_semantic import semantic_review
+from .privacy_presentation import present_review
 from .share_package import approve_package, load_package, prepare_package
 from .story_pipeline import validate_story
 from .delivery import filenames, preferences, validate_delivery
@@ -294,19 +295,7 @@ def handler_for(studio):
                     self.send(200, result)
                 elif parsed.path == "/api/review":
                     review, baseline = load_review(job.get("review_directory", job["directory"] / "review"))
-                    slots = {f"S{number}": (path, text) for number, (path, text) in enumerate(strings(baseline), 1)}
-                    for finding in review["findings"]:
-                        finding["recommended"] = suggested_action(finding)
-                        finding["contexts"] = []
-                        for occurrence in finding["occurrences"][:3]:
-                            text = at_path(baseline, occurrence["path"])
-                            finding["contexts"].append(text[max(0, occurrence["start"] - 160):occurrence["end"] + 160])
-                        finding["related_contexts"] = []
-                        for identifier in finding.get("related", []):
-                            if identifier in slots:
-                                path, text = slots[identifier]
-                                finding["related_contexts"].append({"event": path[0] + 1, "field": list(path[1:]), "text": text})
-                    self.send(200, review)
+                    self.send(200, present_review(review, baseline))
                 elif parsed.path == "/api/file":
                     name = query.get("name", [""])[0]
                     if "generation" not in job or job["status"] == "running":

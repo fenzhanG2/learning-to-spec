@@ -156,6 +156,22 @@ class StudioTests(unittest.TestCase):
         status, _, _ = self.request("/api/scan", {**headers, "Content-Type": "text/plain"}, b"{}")
         self.assertEqual(status, 400)
 
+    def test_review_endpoint_does_not_send_unverified_model_conclusions_or_rewrites(self):
+        self.studio.jobs["test"] = {"id": "test", "status": "done", "directory": self.root}
+        review = {"review_id": "synthetic-review", "findings": [{
+            "id": "Psynthetic", "category": "inference", "text": "Exact synthetic source", "label": "PRIVATE_MODEL_GUESS",
+            "reason": "PRIVATE_MODEL_GUESS", "alternative": "PRIVATE_MODEL_REWRITE", "necessity": "uncertain",
+            "recommended": None, "detectors": ["copilot"], "occurrences": [], "assessments": [{"reason": "PRIVATE_MODEL_GUESS"}],
+        }]}
+        with patch("session_spec.studio.load_review", return_value=(review, [])):
+            status, _, body = self.request("/api/review?job=test", {"Authorization": "Bearer " + self.studio.token})
+        self.assertEqual(status, 200)
+        self.assertNotIn(b"PRIVATE_MODEL_", body)
+        returned = json.loads(body)
+        self.assertEqual(returned["review_id"], "synthetic-review")
+        self.assertEqual(returned["findings"][0]["text"], "Exact synthetic source")
+        self.assertEqual(review["findings"][0]["reason"], "PRIVATE_MODEL_GUESS")
+
     def test_open_local_is_allowlisted_and_requires_finished_output(self):
         generation = self.root / "generation"
         (generation / "story").mkdir(parents=True)

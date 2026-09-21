@@ -3,6 +3,7 @@ from pathlib import Path
 
 from .reduction import apply_review, digest, load_review, recommended_decisions, reduced_export, scan_session, suggested_action
 from .reduction_semantic import semantic_review
+from .privacy_presentation import present_review
 from .storage import write_json
 from .story_pipeline import run_story
 from .delivery import deliver, preferences
@@ -107,13 +108,21 @@ def run(arguments, defaults):
         if arguments.allow_copilot_review:
             review = semantic_review(arguments.out, consent=True, max_calls=arguments.max_calls, **settings)
         return {"review_id": review["review_id"], "review": str(arguments.out / "review.json"), "findings": len(review["findings"]),
-                "hard_removals": review["hard_removals"], "semantic": review["semantic"], "next": "Choose each finding with privacy-choose or studio; review files must remain local."}
+                "hard_removals": review["hard_removals"], "semantic": present_review(review)["semantic"], "next": "Choose each finding with privacy-choose or studio; review files must remain local."}
     if command == "privacy-choose":
         review, baseline = load_review(arguments.directory)
         decisions = recommended_decisions(review)
         if not arguments.recommended:
-            for finding in review["findings"]:
-                print(f'\n{finding["label"]} · {len(finding["occurrences"])} occurrences\n{finding["text"][:500]}\n{finding["reason"]}')
+            for finding, visible in zip(review["findings"], present_review(review, baseline)["findings"]):
+                print(f'\n{visible["label"]} · {len(visible["occurrences"])} occurrences\n{visible["text"]}\n{visible["reason"]}')
+                if visible.get("assessment_summary"):
+                    print(visible["assessment_summary"]["notice"])
+                for occurrence in visible["occurrences"]:
+                    print(f'Selected span · Event {occurrence["path"][0] + 1} · {json.dumps(occurrence["path"][1:])} · characters {occurrence["start"]}:{occurrence["end"]}')
+                for context in visible.get("contexts", []):
+                    print(f'Source context:\n{context}')
+                for context in visible.get("related_contexts", []):
+                    print(f'Related clue (context only) · Event {context["event"]} · {json.dumps(context["field"])}\n{context["text"]}')
                 action = input(f'Choose keep / remove / pseudonymize / generalize (suggested: {suggested_action(finding)}): ').strip()
                 if action not in {"keep", "remove", "pseudonymize", "generalize"}:
                     raise ValueError("No valid explicit choice; no decisions were saved")
