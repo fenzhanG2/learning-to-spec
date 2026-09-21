@@ -28,6 +28,14 @@ OUTPUT_FILES = {"human-spec.html", "agent-spec.md", "evidence.md"}
 SUPPORT_FILES = {"source.json", "evidence.jsonl", "input.json", "edition.json", "article.json", "brief.json", "insights.json",
                  "language.json", "agent-presentation.json", "human-presentation.json", "agent-rendered.md", "evidence-rendered.md",
                  "tool-ledger.json", "fast-contract.md", "fast-receipt.json"}
+DRAFT_FAILURE_CODES = {"draft_references_invalid", "draft_structure_invalid"}
+
+
+class DraftValidationError(ValueError):
+    def __init__(self, message, issues):
+        super().__init__(message)
+        self.error_code = ("draft_references_invalid" if any("source refs" in issue for issue in issues)
+                           else "draft_structure_invalid")
 
 
 def plain_path(value):
@@ -202,6 +210,7 @@ def run_fast_story(from_export, destination, backend, *, language="auto", model=
         write_json(support / "fast-attempt.json", receipt)
         try:
             repair_mode = None
+            draft_issues = []
             for attempt in range(2):
                 label = "fast-story-draft" if attempt == 0 else "fast-story-repair"
                 entry = {"index": attempt, "label": label}
@@ -222,7 +231,7 @@ def run_fast_story(from_export, destination, backend, *, language="auto", model=
                             edition = apply_replacements(edition, response)
                         except (ValueError, TypeError) as error:
                             entry["issues"] = [str(error)]
-                            raise ValueError("Fast draft failed its one bounded structural repair; invalid replacements: " + str(error)) from error
+                            raise DraftValidationError("Fast draft failed its one bounded structural repair; invalid replacements: " + str(error), draft_issues) from error
                     else:
                         edition, moves = normalize_edition_envelope(response)
                         if moves:
@@ -240,7 +249,8 @@ def run_fast_story(from_export, destination, backend, *, language="auto", model=
                     break
                 write_json(support / "fast-attempt.json", receipt)
                 if attempt:
-                    raise ValueError("Fast draft failed its one bounded structural repair; no output approved")
+                    raise DraftValidationError("Fast draft failed its one bounded structural repair; no output approved", [*draft_issues, *issues])
+                draft_issues = issues
                 patchable = (isinstance(repair_data.get("candidate"), dict)
                              and set(repair_data["candidate"]) == {"article", "brief", "insights"}
                              and isinstance(repair_data["candidate"].get("article"), dict)
@@ -252,6 +262,9 @@ def run_fast_story(from_export, destination, backend, *, language="auto", model=
                     "Replace only fields needed for the listed defects; do not regenerate the draft. "
                     "Use 1–8 edits and at most 6,000 JSON characters total. Paths are arrays of exact existing keys and zero-based integer indices, "
                     "beneath article/brief/insights; never replace those whole roots. No add/remove operations, duplicate or overlapping paths. "
+                    "If a required field is missing, replace its nearest EXISTING parent object with that object plus the source-supported field, "
+                    "preserving every other field and value; never target a missing key directly. Error locations use slash-separated paths; "
+                    "convert array indices to integers in replacement paths. "
                     "Every value and reference must be justified by the complete source. Never delete requirements, coverage or a continuation to evade a defect. "
                     if repair_mode == "field_replacements" else
                     "The draft has an invalid JSON/root envelope that field replacements cannot fix; return one complete corrected joint JSON object within the 12,000-character target, not replacements. "

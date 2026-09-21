@@ -489,7 +489,7 @@ test('unknown or nonterminal timeout markers never claim a diagnosed preparation
 });
 
 test('tool invocation returns safe bounded failure details instead of an opaque host exception', async () => {
-  for (const code of ['timeout', 'call_budget', 'cleanup_unconfirmed', 'export_failed']) {
+  for (const code of ['timeout', 'call_budget', 'cleanup_unconfirmed', 'export_failed', 'draft_references_invalid', 'draft_structure_invalid']) {
     const context = fixture({ answers: [{ action: 'accept', content: { readers: 'both', delivery: 'local', privacyMode: 'llm' } }] });
     const original = context.bridge.call;
     context.bridge.call = async (operation, data) => operation === 'status'
@@ -500,6 +500,11 @@ test('tool invocation returns safe bounded failure details instead of an opaque 
     assert.equal(response.resultType, 'success');
     assert.equal(result.status, 'not_exported');
     assert.equal(result.error_code, code);
+    if (code.startsWith('draft_')) {
+      assert.match(result.message, /One automatic repair was attempted/);
+      assert.match(result.message, /\/to-spec again.*additional model calls/);
+      assert.match(result.message, code === 'draft_references_invalid' ? /source citations/ : /invalid draft format/);
+    }
     assert.match(result.next_action, /Do not retry/);
     assert.doesNotMatch(response.textResultForLlm, /PRIVATE_DIAGNOSTIC_CANARY/);
     assert.equal(context.calls.filter(call => call[0] === 'scan').length, 1);

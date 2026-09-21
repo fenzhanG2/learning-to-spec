@@ -36,6 +36,8 @@ async function waitForExport() {
         timeout: 'The configured time limit was reached. Saved progress remains local; no new export or upload was started.',
         cleanup_unconfirmed: 'Worker cleanup is not confirmed. Do not start another export until cleanup is checked.',
         call_budget: 'The three-call model budget was reached. Saved progress remains local; no automatic retry occurred.',
+        draft_references_invalid: 'The draft has missing or invalid source citations. One automatic repair could not produce a valid draft. No final files were approved or uploaded. Run /to-spec again to try a fresh draft with additional model calls.',
+        draft_structure_invalid: 'The model returned an invalid draft format. One automatic repair could not produce a valid draft. No final files were approved or uploaded. Run /to-spec again to try a fresh draft with additional model calls.',
       };
       document.getElementById('progress-detail').textContent = messages[value.error_code] || 'A validation or provider error stopped this export. See the conversation result; saved diagnostics remain local.';
       throw new Error(document.getElementById('progress-detail').textContent);

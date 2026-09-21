@@ -22,6 +22,7 @@ from pathlib import Path
 from .abstract_privacy import PIPELINE, load_abstract_review, prepare_abstract_review
 from .backend import PreparationBudget, PreparationCallLimitError, PreparationTimeoutError, bounded_seconds, preparation_budget
 from .delivery import preferences
+from .fast_story import DRAFT_FAILURE_CODES, DraftValidationError
 from .ingest import origin_of
 from .privacy_presentation import present_review
 from .privacy import HIDDEN_FIELDS, SECRET_FIELD, content_redaction, redaction_enabled, sanitize
@@ -367,7 +368,7 @@ class NativeStudio(DurableStudio):
                                 with self.lock:
                                     job["automated_elapsed_seconds"] = spent + time.monotonic() - budget.started
                 return operation()
-            except (PreparationTimeoutError, PreparationCallLimitError) as error:
+            except (PreparationTimeoutError, PreparationCallLimitError, DraftValidationError) as error:
                 with self.lock:
                     job["error_code"] = error.error_code
                 raise
@@ -419,7 +420,7 @@ class NativeStudio(DurableStudio):
                         elapsed = 0
             result = {"schema": "native-progress/v1", "phase": phase, "elapsed_seconds": max(0, int(elapsed)), "limit_seconds": 300}
             if phase == "error":
-                result["error_code"] = job.get("error_code") if job.get("error_code") in {"timeout", "cleanup_unconfirmed", "call_budget"} else "export_failed"
+                result["error_code"] = job.get("error_code") if job.get("error_code") in {"timeout", "cleanup_unconfirmed", "call_budget", *DRAFT_FAILURE_CODES} else "export_failed"
             return result
 
     def output_delivery(self, identifier, expected=None, name=None, local_paths=False):
@@ -808,7 +809,7 @@ class NativeBridge:
             return self.progress_canvas(identifier)
         if operation == "status":
             result = self.studio.snapshot(identifier)
-            if result.get("status") == "error" and job.get("error_code") in {"timeout", "cleanup_unconfirmed", "call_budget"}:
+            if result.get("status") == "error" and job.get("error_code") in {"timeout", "cleanup_unconfirmed", "call_budget", *DRAFT_FAILURE_CODES}:
                 result["error_code"] = job["error_code"]
                 if job["error_code"] == "cleanup_unconfirmed":
                     result["next_action"] = "Cleanup is unconfirmed. Do not retry until the local job is checked."

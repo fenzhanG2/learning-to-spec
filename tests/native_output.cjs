@@ -108,7 +108,7 @@ test('live progress updates through review and export before enabling verified d
 });
 
 test('terminal progress failure stops polling and never exposes private error text or downloads', async () => {
-  for (const code of ['timeout', 'cleanup_unconfirmed', 'call_budget', 'PRIVATE_FAILURE']) {
+  for (const code of ['timeout', 'cleanup_unconfirmed', 'call_budget', 'draft_references_invalid', 'draft_structure_invalid', 'PRIVATE_FAILURE']) {
     const example = fixture({ hash: '#access=synthetic&progress=1', fetch: async () => ({ ok: true,
       json: async () => ({ phase: 'error', error_code: code, detail: 'PRIVATE_SOURCE' }),
     }) });
@@ -118,6 +118,11 @@ test('terminal progress failure stops polling and never exposes private error te
     assert.equal(example.timers.size, 0);
     assert.equal(example.elements['progress-title'].textContent, 'Export stopped');
     assert.doesNotMatch(example.elements.status.textContent, /PRIVATE/);
+    if (code.startsWith('draft_')) {
+      assert.match(example.elements.status.textContent, /One automatic repair/);
+      assert.match(example.elements.status.textContent, /\/to-spec again/);
+      assert.match(example.elements.status.textContent, code === 'draft_references_invalid' ? /source citations/ : /invalid draft format/);
+    }
   }
   const missing = fixture({ hash: '#progress=1' });
   await missing.ready;

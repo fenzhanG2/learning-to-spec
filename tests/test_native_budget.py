@@ -10,6 +10,7 @@ from unittest.mock import patch
 from session_spec.backend import (CopilotBackend, PreparationBudget, PreparationCallLimitError,
                                   PreparationTimeoutError, check_preparation_deadline, preparation_budget, run_preparation_process)
 from session_spec.model_io import generate_json
+from session_spec.fast_story import DraftValidationError
 from session_spec.native_bridge import NativeBridge, PIPELINE
 
 
@@ -312,6 +313,28 @@ class NativeBudgetTests(unittest.TestCase):
                         self.assertIn("Do not retry", status["next_action"])
                 finally:
                     release.set()
+                    bridge.close()
+
+    def test_exhausted_draft_repair_exposes_only_safe_failure_categories(self):
+        for issues, code in ((["Agent continuation needs real source refs"], "draft_references_invalid"),
+                             (["Invalid JSON"], "draft_structure_invalid")):
+            with self.subTest(code=code), tempfile.TemporaryDirectory() as temporary:
+                bridge = NativeBridge("11111111-1111-4111-8111-111111111111", Path(temporary))
+                job = {"id": "a" * 32, "directory": bridge.studio.output / ("a" * 32), "stage": "scan", "status": "new"}
+                job["directory"].mkdir()
+                bridge.studio.jobs[job["id"]] = job
+
+                def operation():
+                    raise DraftValidationError("PRIVATE_DIAGNOSTIC", issues)
+
+                try:
+                    result = bridge.studio.background(job, "scan", operation)
+                    bridge.studio.drain()
+                    self.assertEqual(bridge.call("status", result)["error_code"], code)
+                    progress = bridge.studio.public_progress(job["id"])
+                    self.assertEqual(progress["error_code"], code)
+                    self.assertNotIn("PRIVATE", json.dumps(progress))
+                finally:
                     bridge.close()
 
     def test_local_renderer_uses_deadline_without_consuming_model_call(self):

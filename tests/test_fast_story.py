@@ -8,7 +8,7 @@ from unittest.mock import patch
 
 from offline_provider import guard_offline_test
 from session_spec.backend import ModelResponseError, PreparationTimeoutError
-from session_spec.fast_story import PROFILE, SCHEMA, STATUS, apply_replacements, handoff_attention, normalize_edition_envelope, run_fast_story, source_packet, structural_issues, validate_fast_story
+from session_spec.fast_story import PROFILE, SCHEMA, STATUS, DraftValidationError, apply_replacements, handoff_attention, normalize_edition_envelope, run_fast_story, source_packet, structural_issues, validate_fast_story
 from session_spec.storage import file_hash, write_json
 from session_spec.story_draft import generate_draft
 from test_story_pipeline import FakeBackend, article, brief, insights, packet
@@ -191,6 +191,31 @@ class FastStoryTests(unittest.TestCase):
         self.assertIn("EVERY continuation step", backend.prompts[0])
         self.assertTrue(validate_fast_story(self.output)["valid"])
 
+    def test_missing_continuation_refs_use_existing_parent_repair_without_invented_evidence(self):
+        for suffix in ([], ["steps", 0]):
+            with self.subTest(suffix=suffix):
+                expected = draft()
+                invalid = copy.deepcopy(expected)
+                path = ["article", "agent_detail", "continuation", 0, *suffix]
+                target, replacement = invalid, expected
+                for part in path:
+                    target, replacement = target[part], replacement[part]
+                target.pop("refs")
+                issues = structural_issues(invalid, self.events, "auto")
+                pointer = "/" + "/".join(str(part) for part in path)
+                self.assertTrue(any(pointer in issue and "refs is missing" in issue for issue in issues), issues)
+                backend = FakeBackend([invalid, {"replacements": [{"path": path, "value": replacement}]}])
+                destination = self.root / ("missing-step-refs" if suffix else "missing-parent-refs")
+                run_fast_story(self.base, destination, backend)
+                self.assertIn("nearest EXISTING parent object", backend.prompts[1])
+                self.assertIn("child refs do not substitute for parent refs", backend.prompts[0])
+                self.assertEqual(json.loads((destination / "_support/edition.json").read_bytes()), expected)
+                self.assertEqual(json.loads((destination / "_support/fast-candidate-0.json").read_bytes()), invalid)
+                self.assertEqual(len(backend.calls), 2)
+                self.assertTrue(validate_fast_story(destination)["valid"])
+                with self.assertRaisesRegex(ValueError, "existing field"):
+                    apply_replacements(invalid, {"replacements": [{"path": [*path, "refs"], "value": replacement["refs"]}]})
+
     def test_brief_shape_repair_receives_exact_keys_kinds_and_source_provenance(self):
         invalid = draft()
         constraint = invalid["brief"]["constraints"][0]
@@ -243,12 +268,22 @@ class FastStoryTests(unittest.TestCase):
         invalid = draft()
         invalid["article"]["agent_detail"]["continuation"][0]["steps"][0]["refs"] = []
         backend = FakeBackend([invalid, draft(), draft()])
-        with self.assertRaisesRegex(ValueError, "invalid replacements"):
+        with self.assertRaisesRegex(DraftValidationError, "invalid replacements") as raised:
             run_fast_story(self.base, self.output, backend)
+        self.assertEqual(raised.exception.error_code, "draft_references_invalid")
         self.assertEqual(len(backend.calls), 2)
         self.assertFalse((self.output / "_support/story-report.json").exists())
         self.assertEqual(json.loads((self.output / "_support/fast-replacements-1.json").read_bytes()), draft())
         self.assertEqual(json.loads((self.output / "_support/fast-attempt.json").read_bytes())["status"], "failed")
+
+    def test_invalid_json_exhausts_one_repair_then_reports_a_safe_format_category(self):
+        backend = FakeBackend([ModelResponseError("bad", "PRIVATE_INVALID"), ModelResponseError("bad", "PRIVATE_REPAIR")])
+        with self.assertRaises(DraftValidationError) as raised:
+            run_fast_story(self.base, self.output, backend)
+        self.assertEqual(raised.exception.error_code, "draft_structure_invalid")
+        self.assertNotIn("PRIVATE", str(raised.exception))
+        self.assertEqual(len(backend.calls), 2)
+        self.assertFalse((self.output / "agent-spec.md").exists())
 
     def test_provider_timeout_or_auth_failure_never_consumes_a_repair_or_renders(self):
         for index, failure in enumerate((TimeoutError("Synthetic deadline"), ValueError("Synthetic auth failure"))):

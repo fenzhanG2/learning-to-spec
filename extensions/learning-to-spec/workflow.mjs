@@ -386,7 +386,11 @@ export function createWorkflow({ getSession, getBridge, wait = milliseconds => n
       if (value.status === 'error' && value.stage === 'scan' && value.error_code === 'call_budget') {
         throw new PreparationFailure('call_budget', 'The three-call model budget was reached. Saved work is preserved; no additional model call, automatic restart or upload was started.');
       }
-      if (value.status === 'error') throw new PreparationFailure('export_failed', `${progress}: the export did not finish. No completed output was approved. Saved diagnostic details remain local; no retry, rules-only fallback or upload was performed.`);
+      if (value.status === 'error' && value.stage === 'scan' && ['draft_references_invalid', 'draft_structure_invalid'].includes(value.error_code)) {
+        const cause = value.error_code === 'draft_references_invalid' ? 'missing or invalid source citations' : 'an invalid draft format';
+        throw new PreparationFailure(value.error_code, `The draft contained ${cause}. One automatic repair was attempted but could not produce a valid draft. No final files were approved or uploaded. Saved diagnostics remain local. You can run /to-spec again to try a fresh draft; it will use additional model calls.`);
+      }
+      if (value.status === 'error') throw new PreparationFailure('export_failed', `${progress}: the export did not finish. No completed output was approved. Saved diagnostic details remain local; no automatic restart, rules-only fallback or upload was performed.`);
       if (value.status === 'done') return value;
       const label = value.stage === 'scan' && typeof value.phase === 'string' && Object.hasOwn(preparationPhases, value.phase)
         ? `Stage 1 of 3: ${preparationPhases[value.phase]}` : progress;
