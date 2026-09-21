@@ -15,7 +15,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from session_spec.native_bridge import PIPELINE, NativeBridge, open_local_output, protocol_output
+from session_spec.native_bridge import PIPELINE, NativeBridge, open_local_output, protocol_output, windows_markdown_handler
 from native_abstract_fixture import mocked_abstraction
 from offline_provider import guard_offline_test
 from session_spec.runtime import FileLease
@@ -507,12 +507,14 @@ with forbid_live_provider():
     def test_platform_openers_use_paths_not_shell_commands_and_bound_posix_wait(self):
         target = Path(self.temporary.name) / "report with spaces & punctuation.md"
         with patch("session_spec.native_bridge.sys.platform", "win32"), \
+                patch("session_spec.native_bridge.windows_markdown_handler", return_value=True), \
                 patch("session_spec.native_bridge.os.startfile", create=True) as start:
             open_local_output(target)
             start.assert_called_once_with(str(target), "open")
         missing_association = OSError("No associated app")
         missing_association.winerror = 1155
         with patch("session_spec.native_bridge.sys.platform", "win32"), \
+                patch("session_spec.native_bridge.windows_markdown_handler", return_value=True), \
                 patch("session_spec.native_bridge.os.startfile", create=True, side_effect=missing_association), \
                 patch.dict("os.environ", {"WINDIR": str(Path(self.temporary.name) / "Windows")}), \
                 patch("session_spec.native_bridge.subprocess.Popen") as launch:
@@ -522,12 +524,31 @@ with forbid_live_provider():
             with self.assertRaises(OSError):
                 open_local_output(target.with_suffix(".html"))
             self.assertEqual(launch.call_count, 1)
+        with patch("session_spec.native_bridge.sys.platform", "win32"), \
+                patch("session_spec.native_bridge.windows_markdown_handler", return_value=False), \
+                patch("session_spec.native_bridge.os.startfile", create=True) as start, \
+                patch.dict("os.environ", {"WINDIR": str(Path(self.temporary.name) / "Windows")}), \
+                patch("session_spec.native_bridge.subprocess.Popen") as launch:
+            open_local_output(target)
+            self.assertEqual(launch.call_args.args[0][-1], str(target))
+            start.assert_not_called()
         for platform, command in (("darwin", "open"), ("linux", "xdg-open")):
             with patch("session_spec.native_bridge.sys.platform", platform), patch("session_spec.native_bridge.subprocess.run") as run:
                 open_local_output(target)
                 self.assertEqual(run.call_args.args[0], [command, str(target)])
                 self.assertFalse(run.call_args.kwargs["shell"])
                 self.assertEqual(run.call_args.kwargs["timeout"], 5)
+
+    def test_markdown_association_probe_excludes_windows_picker_without_changing_settings(self):
+        for result_code, executable, expected in ((0, "editor.exe", True), (0, "OpenWith.exe", False), (1, "", False), (0, "", False)):
+            with patch("session_spec.native_bridge.ctypes.WinDLL", create=True) as library:
+                def query(flags, kind, extension, verb, result, size):
+                    self.assertEqual((flags, kind, extension, verb), (0, 2, ".md", "open"))
+                    result.value = executable
+                    return result_code
+                library.return_value.AssocQueryStringW.side_effect = query
+                self.assertEqual(windows_markdown_handler(), expected)
+                library.assert_called_once_with("shlwapi")
 
     def test_open_refuses_reparse_paths_even_when_saved_bytes_are_valid(self):
         job = self.completed_output()

@@ -1,5 +1,6 @@
 import argparse
 import copy
+import ctypes
 import hashlib
 import hmac
 import json
@@ -32,8 +33,22 @@ from .storage import write_json
 WEB = Path(__file__).parent / "web"
 
 
+def windows_markdown_handler():
+    query = ctypes.WinDLL("shlwapi").AssocQueryStringW
+    query.argtypes = [ctypes.c_uint, ctypes.c_uint, ctypes.c_wchar_p, ctypes.c_wchar_p,
+                      ctypes.c_wchar_p, ctypes.POINTER(ctypes.c_uint)]
+    query.restype = ctypes.c_long
+    size = ctypes.c_uint(32768)
+    result = ctypes.create_unicode_buffer(size.value)
+    return (query(0, 2, ".md", "open", result, ctypes.byref(size)) == 0
+            and bool(result.value) and Path(result.value).name.lower() != "openwith.exe")
+
+
 def open_local_output(target):
     if sys.platform == "win32":
+        if target.suffix == ".md" and not windows_markdown_handler():
+            subprocess.Popen([str(Path(os.environ["WINDIR"]) / "System32/notepad.exe"), str(target)], shell=False)
+            return
         try:
             os.startfile(str(target), "open")
         except OSError as error:

@@ -51,30 +51,6 @@ async function waitForExport() {
   }
 }
 
-function previewDocument(content) {
-  const template = document.createElement('template');
-  template.innerHTML = content;
-  for (const element of template.content.querySelectorAll('script,base,meta,link,iframe,object,embed')) element.remove();
-  for (const element of template.content.querySelectorAll('*')) {
-    for (const attribute of [...element.attributes]) {
-      if (attribute.name.toLowerCase().startsWith('on')) element.removeAttribute(attribute.name);
-    }
-  }
-  for (const link of template.content.querySelectorAll('a[href],area[href]')) {
-    const href = link.getAttribute('href').trim();
-    for (const attribute of ['target', 'download', 'ping']) link.removeAttribute(attribute);
-    if (href.startsWith('#')) {
-      link.setAttribute('href', `about:srcdoc${href}`);
-    } else {
-      link.removeAttribute('href');
-      link.setAttribute('aria-disabled', 'true');
-      link.setAttribute('title', 'Static preview: use the Open buttons above for companion files.');
-    }
-  }
-  const policy = "default-src 'none'; script-src 'none'; style-src 'unsafe-inline'; img-src data:; connect-src 'none'; frame-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'";
-  return `<!doctype html><html><head><meta http-equiv="Content-Security-Policy" content="${policy}"></head><body>${template.innerHTML}</body></html>`;
-}
-
 function download(name) {
   if (!cache.has(name)) return;
   if (downloadUrl) URL.revokeObjectURL(downloadUrl);
@@ -180,12 +156,8 @@ async function prepare() {
       const hash = [...new Uint8Array(await crypto.subtle.digest('SHA-256', await blob.arrayBuffer()))].map(value => value.toString(16).padStart(2, '0')).join('');
       if (hash !== file.sha256) throw new Error('The saved file changed. Reopen the export; no unverified download is enabled.');
       total += bytes;
-      cache.set(file.name, blob);
+      if (file.name === 'deliverables.zip') cache.set(file.name, blob);
       button.disabled = false;
-      if (file.name === 'human-spec.html') {
-        document.getElementById('story').srcdoc = previewDocument(await blob.text());
-        document.getElementById('preview').hidden = false;
-      }
     }
     status.textContent = 'Ready · saved locally · no ArtifactStore upload by this panel';
   } finally { clearTimeout(timer); }

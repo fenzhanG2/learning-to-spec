@@ -46,10 +46,7 @@ function fixture(options = {}) {
   const document = {
     body: new Element('body'),
     getElementById: name => elements[name],
-    createElement: tag => tag === 'template' ? {
-      innerHTML: '',
-      content: { querySelectorAll: selector => options.previewNodes?.[selector] || [] },
-    } : new Element(tag),
+    createElement: tag => new Element(tag),
     createRange: () => ({ selectNodeContents(element) { element.selected = true; } }),
   };
   const calls = [];
@@ -161,16 +158,15 @@ test('selected files use authenticated reads then explicit scoped opening; ZIP k
   assert.equal(example.timers.size, 1);
 });
 
-test('human-only selection previews verified HTML in a sandbox and excludes Agent files', async () => {
+test('human-only selection opens verified HTML and excludes Agent files and embedded previews', async () => {
   const example = fixture({ selected: ['human-spec.html'] });
   await example.ready;
-  assert.ok(example.elements.story.srcdoc.includes(example.bodies['human-spec.html']));
-  assert.match(example.elements.story.srcdoc, /default-src 'none'; script-src 'none'; style-src 'unsafe-inline'; img-src data:/);
-  assert.match(example.elements.story.srcdoc, /connect-src 'none'; frame-src 'none'/);
-  assert.equal(example.elements.preview.hidden, false);
+  assert.equal(example.elements.story, undefined);
+  assert.equal(example.elements.preview, undefined);
   assert.equal(example.elements.agent.hidden, true);
   assert.equal(example.elements.evidence.hidden, true);
-  assert.match(html, /<iframe\b[^>]*\bid="story"[^>]*\bsandbox\s*>/);
+  assert.doesNotMatch(html, /A look inside|<iframe\b|preview-note/);
+  assert.doesNotMatch(script, /srcdoc|innerHTML|previewDocument/);
   assert.match(html, /id="status"[^>]*role="status"[^>]*aria-live="polite"/);
   assert.deepEqual(example.calls.map(call => call.route), [
     '/api/delivery', '/api/file?name=human-spec.html', '/api/file?name=deliverables.zip',
@@ -178,35 +174,6 @@ test('human-only selection previews verified HTML in a sandbox and excludes Agen
   await example.elements.human.click();
   assert.equal(JSON.parse(example.calls.at(-1).request.body).target, 'human-spec.html');
   assert.equal(example.document.body.children.length, 0);
-});
-
-test('preview-only DOM projection disables non-fragment links and active elements', async () => {
-  const anchor = href => ({
-    values: { href, target: '_top', download: 'companion', ping: '/private' },
-    getAttribute(name) { return this.values[name]; },
-    setAttribute(name, value) { this.values[name] = value; },
-    removeAttribute(name) { delete this.values[name]; },
-  });
-  const links = ['#target', 'agent-spec.md', 'evidence.md#e000001', 'https://example.invalid/', 'javascript:alert(1)'].map(anchor);
-  const active = new Element('script');
-  const eventElement = { attributes: [{ name: 'onload' }, { name: 'style' }], removed: [],
-    removeAttribute(name) { this.removed.push(name); } };
-  const example = fixture({ selected: ['human-spec.html'], previewNodes: {
-    'script,base,meta,link,iframe,object,embed': [active], '*': [eventElement], 'a[href],area[href]': links,
-  } });
-  await example.ready;
-  assert.equal(active.removed, true);
-  assert.deepEqual(eventElement.removed, ['onload']);
-  assert.equal(links[0].values.href, 'about:srcdoc#target');
-  for (const link of links) {
-    for (const attribute of ['target', 'download', 'ping']) assert.equal(link.values[attribute], undefined);
-  }
-  for (const link of links.slice(1)) {
-    assert.equal(link.values.href, undefined);
-    assert.equal(link.values['aria-disabled'], 'true');
-    assert.match(link.values.title, /Open buttons above/);
-  }
-  assert.match(html, /Downloaded files keep their original bytes/);
 });
 
 test('missing access capability makes no request and enables no downloads', async () => {
