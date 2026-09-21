@@ -66,32 +66,55 @@ class ReviewTransportTests(unittest.TestCase):
         for crosswalk in (review_crosswalk({}, []), review_crosswalk({"article": {"agent_markdown": "See E000001"}}, packet())):
             self.assertEqual(review_crosswalk_transport(crosswalk), crosswalk)
 
-    def test_actual_prompt_uses_catalog_without_changing_full_source_or_edition(self):
+    def test_default_keeps_expanded_prompt_and_existing_cache_identity(self):
+        draft = {"article": article(), "brief": brief(), "insights": insights()}
+        crosswalk = repeated_index()
+        with tempfile.TemporaryDirectory() as temporary, patch("session_spec.story_editor.review_crosswalk", return_value=crosswalk), \
+                patch("session_spec.story_editor.review_crosswalk_transport", side_effect=AssertionError("Default must not factor")):
+            root = Path(temporary)
+            backend = FakeBackend([edition_review()])
+            generate_edition(root, draft, packet(), backend, validate_article)
+            self.assertIn(json.dumps(crosswalk, ensure_ascii=False), backend.prompts[0])
+            self.assertNotIn(TRANSPORT_SCHEMA, backend.prompts[0])
+            receipt = json.loads((root / "edition-receipt.json").read_bytes())
+            self.assertNotIn("review_crosswalk_transport", receipt["identity"])
+            self.assertFalse((root / "edition-crosswalk-transport-0.json").exists())
+            cached = FakeBackend([])
+            generate_edition(root, draft, packet(), cached, validate_article, crosswalk_transport=False)
+            self.assertEqual(len(cached.calls), 0)
+
+    def test_opt_in_prompt_uses_catalog_and_saves_both_forms_with_full_source_and_edition(self):
         draft = {"article": article(), "brief": brief(), "insights": insights()}
         crosswalk = repeated_index()
         with tempfile.TemporaryDirectory() as temporary, patch("session_spec.story_editor.review_crosswalk", return_value=crosswalk):
+            root = Path(temporary)
             backend = FakeBackend([edition_review()])
-            generate_edition(Path(temporary), draft, packet(), backend, validate_article)
-            self.assertIn(json.dumps(review_crosswalk_transport(crosswalk), ensure_ascii=False), backend.prompts[0])
+            generate_edition(root, draft, packet(), backend, validate_article, crosswalk_transport=True)
+            transport = review_crosswalk_transport(crosswalk)
+            self.assertEqual(transport["schema"], TRANSPORT_SCHEMA)
+            self.assertIn(json.dumps(transport, ensure_ascii=False), backend.prompts[0])
             self.assertIn(json.dumps(packet(), ensure_ascii=False), backend.prompts[0])
             self.assertIn(json.dumps(draft, ensure_ascii=False), backend.prompts[0])
             self.assertEqual(len(backend.calls), 1)
+            receipt = json.loads((root / "edition-receipt.json").read_bytes())
+            self.assertEqual(receipt["identity"]["review_crosswalk_transport"], TRANSPORT_SCHEMA)
+            for name, value in (("crosswalk", crosswalk), ("crosswalk-transport", transport)):
+                saved = json.loads((root / f"edition-{name}-0.json").read_bytes())
+                self.assertEqual(saved, {"candidate_sha256": receipt["candidate_sha256"], **value})
 
-    def test_old_transport_receipt_cannot_skip_new_review(self):
+    def test_cache_does_not_cross_encodings_or_transport_versions(self):
         draft = {"article": article(), "brief": brief(), "insights": insights()}
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
-            generate_edition(root, draft, packet(), FakeBackend([edition_review()]), validate_article)
-            receipt_path = root / "edition-receipt.json"
-            receipt = json.loads(receipt_path.read_bytes())
-            del receipt["identity"]["review_crosswalk_transport"]
-            receipt_path.write_text(json.dumps(receipt), encoding="utf-8")
-            backend = FakeBackend([edition_review()])
-            generate_edition(root, draft, packet(), backend, validate_article)
-            self.assertEqual(len(backend.calls), 1)
-            cached = FakeBackend([])
-            generate_edition(root, draft, packet(), cached, validate_article)
-            self.assertEqual(len(cached.calls), 0)
+            for enabled, version in ((False, TRANSPORT_SCHEMA), (True, TRANSPORT_SCHEMA),
+                                     (True, "review-crosswalk-transport/v-next"), (False, TRANSPORT_SCHEMA)):
+                with self.subTest(enabled=enabled, version=version), patch("session_spec.story_editor.TRANSPORT_SCHEMA", version):
+                    backend = FakeBackend([edition_review()])
+                    generate_edition(root, draft, packet(), backend, validate_article, crosswalk_transport=enabled)
+                    self.assertEqual(len(backend.calls), 1)
+                    cached = FakeBackend([])
+                    generate_edition(root, draft, packet(), cached, validate_article, crosswalk_transport=enabled)
+                    self.assertEqual(len(cached.calls), 0)
 
 
 if __name__ == "__main__":

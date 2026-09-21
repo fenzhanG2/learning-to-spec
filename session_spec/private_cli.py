@@ -1,18 +1,19 @@
 import json
 from pathlib import Path
 
-from .reduction import apply_review, digest, load_review, recommended_decisions, reduced_export, scan_session, suggested_action
-from .reduction_semantic import semantic_review
+from .reduction import apply_review, digest, load_review, recommended_decisions, reduced_export, suggested_action
+from .privacy_presentation import present_review
 from .storage import write_json
 from .story_pipeline import run_story
 from .delivery import deliver, preferences
+from .privacy import content_redaction
 
 
 COMMANDS = {"privacy-scan", "privacy-choose", "private-story", "studio", "share-package", "share-approve", "artifact-plan", "artifact-publish", "artifact-verify"}
 
 
 def configure(subcommands):
-    scan = subcommands.add_parser("privacy-scan", help="Locally remove credentials and prepare privacy/discomfort choices before generation")
+    scan = subcommands.add_parser("privacy-scan", help="Abstract the session privately, then review the selected draft documents for disclosure")
     scan.add_argument("session")
     scan.add_argument("--out", type=Path, required=True)
     scan.add_argument("--audience", default="local", help="local, root (owner-only), or team:SLUG")
@@ -20,7 +21,7 @@ def configure(subcommands):
     scan.add_argument("--delivery", choices=("local", "artifactstore"), required=True)
     scan.add_argument("--purpose", default="Technical story and actionable Agent handoff")
     scan.add_argument("--redact", action="append", default=[], help="Additional exact phrase to flag everywhere")
-    scan.add_argument("--allow-copilot-review", action="store_true", help="Consent to send locally pre-masked context to Copilot for semantic privacy suggestions")
+    scan.add_argument("--allow-copilot-review", action="store_true", help="Consent to send the complete observable session to Copilot for private abstraction, then review draft disclosures with rules plus Copilot")
     scan.add_argument("--max-calls", type=int, default=20)
     scan.add_argument("--model")
     scan.add_argument("--gh-host")
@@ -28,7 +29,7 @@ def configure(subcommands):
     choose.add_argument("directory", type=Path)
     choose.add_argument("--recommended", action="store_true", help="Adopt available suggestions; uncertain semantic findings remain unresolved and block generation")
     choose.add_argument("--out", type=Path, required=True)
-    generate = subcommands.add_parser("private-story", help="Generate HTML/Markdown from the explicitly approved reduced Copilot session")
+    generate = subcommands.add_parser("private-story", help="Apply approved disclosure choices to the private abstraction and export HTML/Markdown")
     generate.add_argument("directory", type=Path)
     generate.add_argument("--decisions", type=Path, required=True)
     generate.add_argument("--out", type=Path, required=True)
@@ -74,6 +75,12 @@ def generate_private(directory, decisions, output, home, resume=False, confirm_c
     if confirm_choices is not True:
         raise ValueError("Explicit confirmation of the privacy choices is required before generation")
     review, baseline = load_review(directory)
+    if review.get("pipeline") not in {None, "abstract-then-redact/v1"}:
+        raise ValueError("Unknown privacy pipeline; old generation cannot be used as a fallback")
+    if review.get("pipeline") == "abstract-then-redact/v1":
+        from .abstract_privacy import generate_abstract_private
+
+        return generate_abstract_private(directory, decisions, output, home, resume=resume, confirm_choices=confirm_choices, **settings)
     selection = review.get("preferences", {})
     preferences(selection.get("readers"), selection.get("destination"), review["audience"])
     output = Path(output).resolve()
@@ -87,9 +94,12 @@ def generate_private(directory, decisions, output, home, resume=False, confirm_c
     else:
         apply_review(directory, decisions, output / "reduced")
     canonical = reduced_export(output / "reduced", home)
-    result = run_story(None, home, output / "story", from_export=canonical,
-                       resume=resume and (output / "story/_support/story-source.json").is_file(), **settings)
-    result["privacy"] = "Generated only from the reduced session; source unchanged. Inspect final output before sharing."
+    full_content = review.get("privacy_mode") == "full"
+    with content_redaction(not full_content):
+        result = run_story(None, home, output / "story", from_export=canonical,
+                           resume=resume and (output / "story/_support/story-source.json").is_file(), **settings)
+    result["privacy"] = ("No privacy scan or sensitive-content redaction requested. Generated files may contain private information or credentials."
+                         if full_content else "Generated only from the reduced session; source unchanged. Inspect final output before sharing.")
     result.update(deliver(output, selection))
     for key, filename in (("human_spec", "human-spec.html"), ("agent_spec", "agent-spec.md"), ("evidence", "evidence.md")):
         result.pop(key, None)
@@ -102,18 +112,30 @@ def run(arguments, defaults):
     command = arguments.command
     settings = {"model": getattr(arguments, "model", None) or defaults.get("model"), "gh_host": getattr(arguments, "gh_host", None) or defaults.get("gh_host")}
     if command == "privacy-scan":
+        from .abstract_privacy import prepare_abstract_review
+
+        if not arguments.allow_copilot_review:
+            raise ValueError("Abstract-first preparation requires explicit Copilot consent; use --allow-copilot-review after reviewing its full-context disclosure")
         selection = preferences(arguments.readers, arguments.delivery, arguments.audience)
-        review = scan_session(arguments.session, arguments.home, arguments.out, arguments.purpose, arguments.audience, arguments.redact, selection)
-        if arguments.allow_copilot_review:
-            review = semantic_review(arguments.out, consent=True, max_calls=arguments.max_calls, **settings)
+        review = prepare_abstract_review(arguments.session, arguments.home, arguments.out, arguments.audience, selection, "llm",
+                                         custom=arguments.redact, purpose=arguments.purpose, max_calls=arguments.max_calls, **settings)
         return {"review_id": review["review_id"], "review": str(arguments.out / "review.json"), "findings": len(review["findings"]),
-                "hard_removals": review["hard_removals"], "semantic": review["semantic"], "next": "Choose each finding with privacy-choose or studio; review files must remain local."}
+                "hard_removals": review["hard_removals"], "semantic": present_review(review)["semantic"], "pipeline": review["pipeline"],
+                "next": "Approve disclosures in the already abstracted documents. Private-story applies those choices and renders without another model generation."}
     if command == "privacy-choose":
         review, baseline = load_review(arguments.directory)
         decisions = recommended_decisions(review)
         if not arguments.recommended:
-            for finding in review["findings"]:
-                print(f'\n{finding["label"]} · {len(finding["occurrences"])} occurrences\n{finding["text"][:500]}\n{finding["reason"]}')
+            for finding, visible in zip(review["findings"], present_review(review, baseline)["findings"]):
+                print(f'\n{visible["label"]} · {len(visible["occurrences"])} occurrences\n{visible["text"]}\n{visible["reason"]}')
+                if visible.get("assessment_summary"):
+                    print(visible["assessment_summary"]["notice"])
+                for occurrence in visible["occurrences"]:
+                    print(f'Selected span · Event {occurrence["path"][0] + 1} · {json.dumps(occurrence["path"][1:])} · characters {occurrence["start"]}:{occurrence["end"]}')
+                for context in visible.get("contexts", []):
+                    print(f'Source context:\n{context}')
+                for context in visible.get("related_contexts", []):
+                    print(f'Related clue (context only) · Event {context["event"]} · {json.dumps(context["field"])}\n{context["text"]}')
                 action = input(f'Choose keep / remove / pseudonymize / generalize (suggested: {suggested_action(finding)}): ').strip()
                 if action not in {"keep", "remove", "pseudonymize", "generalize"}:
                     raise ValueError("No valid explicit choice; no decisions were saved")

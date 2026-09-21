@@ -3,7 +3,7 @@ import shutil
 import tempfile
 from pathlib import Path
 
-from .agent_package import EVIDENCE_RENDERER, HUMAN_PRESENTATION, write_agent_package
+from .agent_package import HUMAN_PRESENTATION, write_agent_package
 from .locking import export_lock
 from .pipeline import write_json
 from .storage import file_hash
@@ -48,7 +48,9 @@ def refresh_story(directory, destination):
             write_json(staged_support / "story-source.json", source)
             article = json.loads((staged_support / "article.json").read_bytes())
             packet = json.loads((staged_support / "input.json").read_bytes())
-            agent_files = write_agent_package(article, packet, previous["language"], staged, staged_support)
+            renderer = "companion/v8" if previous.get("evidence_renderer") == "companion/v8" else "companion/v7"
+            agent_files = write_agent_package(article, packet, previous["language"], staged, staged_support,
+                                             evidence_renderer=renderer if article.get("agent_detail", {}).get("schema") == "agent-detail/v3" else None)
             write_json(staged_support / "human-presentation.json", HUMAN_PRESENTATION)
             render_story(staged_support, staged / "human-spec.html")
             report = {**previous, "output_schema": "story-output/v6", "generation_method": "decision-handoff-render/v1",
@@ -58,7 +60,7 @@ def refresh_story(directory, destination):
                       "hashes": {name: file_hash(staged / name) for name in ("human-spec.html", *agent_files)},
                       "support_hashes": {path.name: file_hash(path) for path in staged_support.iterdir() if path.is_file()}}
             if article.get("agent_detail", {}).get("schema") == "agent-detail/v3":
-                report.update(output_schema="story-output/v9", generation_method="markdown-files-render/v1", evidence_renderer=EVIDENCE_RENDERER)
+                report.update(output_schema="story-output/v9", generation_method="markdown-files-render/v1", evidence_renderer=renderer)
             write_json(staged_support / "story-report.json", report)
             validation = validate_story(staged)
             if not validation["valid"]:

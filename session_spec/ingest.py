@@ -198,11 +198,52 @@ def automated_feedback(record):
     return content == "user responded: the user is not available to respond and will review your work later. work autonomously and make good decisions."
 
 
+def question_answers(record):
+    if (record.get("type") != "tool.execution_complete" or record.get("tool") != "AskUserQuestion"
+            or record.get("success") is False or record.get("error")):
+        return ""
+    content = tool_text(record)
+    prefix = "User has answered your questions: "
+    suffix = ". You can now continue with the user's answers in mind."
+    if not content.startswith(prefix) or not content.endswith(suffix):
+        return ""
+    body = content[len(prefix):-len(suffix)]
+    answers = []
+    decoder = json.JSONDecoder()
+    try:
+        while body:
+            question, position = decoder.raw_decode(body)
+            if not isinstance(question, str) or not question.strip() or not body[position:].startswith("="):
+                return ""
+            answer, length = decoder.raw_decode(body[position + 1:])
+            if not isinstance(answer, str) or not answer.strip() or answer not in content:
+                return ""
+            answers.append(answer)
+            body = body[position + 1 + length:]
+            if body.startswith(" user notes: "):
+                notes = body[len(" user notes: "):]
+                if notes.strip() and notes not in answers:
+                    answers.append(notes)
+                body = ""
+            elif body.startswith(", "):
+                body = body[2:]
+                if not body:
+                    return ""
+            elif body:
+                return ""
+    except (ValueError, TypeError):
+        return ""
+    return "\n".join(answers)
+
+
 def human_input(record):
     if record["origin"] != "root":
         return ""
     if record["type"] == "user.message":
         return record["text"]
+    answer = question_answers(record)
+    if answer:
+        return answer
     if record["type"] == "tool.execution_complete" and record.get("tool") == "ask_user" and record.get("success") is True:
         if automated_feedback(record):
             return ""
@@ -237,7 +278,8 @@ def make_digest(records, tool_limit=8, message_limit=2400):
             if len(selected_tools) >= tool_limit:
                 break
         dialogue = [record for record in entries if record["origin"] == "root" and record["type"] in {"user.message", "assistant.message"} and record["text"]]
-        selected_tools.update(record["ref"] for record in tools if record.get("tool") == "ask_user" and record["origin"] == "root")
+        selected_tools.update(record["ref"] for record in tools if record["origin"] == "root"
+                              and (record.get("tool") == "ask_user" or human_input(record)))
         pieces = []
         for record in sorted(dialogue + [record for record in tools if record["ref"] in selected_tools], key=lambda item: item["line"]):
             selected_refs.add(record["ref"])
@@ -246,7 +288,7 @@ def make_digest(records, tool_limit=8, message_limit=2400):
                 content = record["text"]
             elif human_input(record):
                 feedback_refs.append(record["ref"])
-                content = "EXPLICIT HUMAN FEEDBACK via ask_user: " + human_input(record)
+                content = "EXPLICIT HUMAN FEEDBACK via " + record["tool"] + ": " + human_input(record)
             elif automated_feedback(record):
                 control_refs.append(record["ref"])
                 content = "AUTOMATED CONTROL RESPONSE, NOT HUMAN AUTHORIZATION: " + tool_text(record)

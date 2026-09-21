@@ -25,6 +25,24 @@ def article():
 
 
 class AgentHandoffTests(unittest.TestCase):
+    def test_input_accounting_does_not_require_a_small_talk_phase(self):
+        candidate = fixture_article(schema="agent-detail/v3")
+        aside = "An unrelated greeting about music."
+        events = [{"ref": "E000000", "type": "user.message", "text": aside, "human_input": aside}, *packet()]
+        candidate["human_input_coverage"].insert(0, {"ref": "E000000", "treatment": "Non-task context; no narrative needed."})
+        candidate["agent_detail"]["trajectory"][0]["human_refs"].insert(0, "E000000")
+        self.assertEqual(validate_article(candidate, events), [])
+        self.assertEqual(len(candidate["agent_detail"]["trajectory"]), 1)
+        self.assertNotIn(aside, render_agent(candidate, events))
+
+    def test_grouping_asides_does_not_waive_material_input_coverage(self):
+        candidate = fixture_article(schema="agent-detail/v3")
+        correction = "No restart: preserve the existing function."
+        events = [*packet(), {"ref": "E000003", "type": "user.message", "text": correction, "human_input": correction}]
+        candidate["human_input_coverage"].append({"ref": "E000003", "treatment": "A short but material correction."})
+        errors = validate_article(candidate, events)
+        self.assertTrue(any("Agent trajectory omits user inputs" in error and "E000003" in error for error in errors))
+
     def test_absent_rationale_does_not_require_invented_placeholder_prose(self):
         candidate = fixture_article(schema="agent-detail/v3")
         detail = candidate["agent_detail"]

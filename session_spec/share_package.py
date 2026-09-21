@@ -1,6 +1,7 @@
 import io
 import hashlib
 import json
+import re
 import zipfile
 from pathlib import Path
 
@@ -12,6 +13,7 @@ from .delivery import filenames
 
 
 ALLOWED = {"index.html", "agent-spec.md", "evidence.md"}
+UNVALIDATED_SCHEMA = "unvalidated-share-package/v1"
 
 
 def prepare_package(story, destination, audience, include_evidence=True, readers="both"):
@@ -66,7 +68,8 @@ def load_package(directory):
     directory = Path(directory).resolve()
     manifest = json.loads((directory / "manifest.json").read_bytes())
     identity = {key: value for key, value in manifest.items() if key != "package_id"}
-    if manifest.get("schema") not in {"share-package/v1", "share-package/v2"} or digest(identity) != manifest.get("package_id"):
+    unvalidated = manifest.get("schema") == UNVALIDATED_SCHEMA
+    if manifest.get("schema") not in {"share-package/v1", "share-package/v2", UNVALIDATED_SCHEMA} or digest(identity) != manifest.get("package_id"):
         raise ValueError("Package manifest changed; prepare again")
     files = manifest.get("files", {})
     readers = manifest.get("readers", "both")
@@ -74,6 +77,16 @@ def load_package(directory):
     allowed = set(filenames(readers, sharing=True))
     if not required <= set(files) <= allowed:
         raise ValueError("Package contains an unapproved filename")
+    if unvalidated:
+        from .draft_recovery import CAUSES
+
+        if (manifest.get("quality") != "unvalidated" or manifest.get("privacy") != "incomplete"
+                or manifest.get("failure_code") not in CAUSES or not isinstance(manifest.get("recovery_id"), str)
+                or not re.fullmatch(r"[a-f0-9]{64}", manifest["recovery_id"]) or set(files) != required
+                or manifest.get("evidence_included") is not False or manifest.get("findings") != []
+                or not isinstance(manifest.get("audience"), str)
+                or not re.fullmatch(r"root|team:[A-Za-z0-9_-]+", manifest["audience"])):
+            raise ValueError("Invalid unvalidated draft package")
     actual = {path.name for path in (directory / "files").iterdir()}
     if actual != set(files):
         raise ValueError("Unexpected content in the share directory")
@@ -81,21 +94,26 @@ def load_package(directory):
         path = directory / "files" / filename
         if path.is_symlink() or not path.is_file() or file_hash(path) != expected:
             raise ValueError("Package bytes changed; approval is invalid")
-        if secure_baseline(path.read_text(encoding="utf-8")) != path.read_text(encoding="utf-8"):
+        if not unvalidated and secure_baseline(path.read_text(encoding="utf-8")) != path.read_text(encoding="utf-8"):
             raise ValueError("Hard-sensitive content blocks publication")
     return manifest
 
 
-def approve_package(directory, package_id, acknowledged_findings, reviewed_all_files=False, *, confirmed_publish=False):
+def approve_package(directory, package_id, acknowledged_findings, reviewed_all_files=False, *, confirmed_publish=False, accept_unvalidated=False):
     directory = Path(directory).resolve()
     manifest = load_package(directory)
     if package_id != manifest["package_id"] or not (reviewed_all_files is True or confirmed_publish is True):
         raise ValueError("Explicit approval of the current selected files is required")
     if set(acknowledged_findings) != {finding["id"] for finding in manifest["findings"]}:
         raise ValueError("Every final disclosure finding needs explicit acknowledgement; edit the privacy choices and regenerate to remove it")
+    if manifest["schema"] == UNVALIDATED_SCHEMA and accept_unvalidated is not True:
+        raise ValueError("Explicit unvalidated-content and incomplete-privacy override is required")
     approval = {"schema": "share-approval/v1", "package_id": package_id, "audience": manifest["audience"],
                 "reviewed_all_files": reviewed_all_files is True, "confirmed_publish": confirmed_publish is True,
                 "acknowledged_findings": sorted(acknowledged_findings)}
+    if manifest["schema"] == UNVALIDATED_SCHEMA:
+        approval["accept_unvalidated"] = True
+        approval["recovery_id"] = manifest["recovery_id"]
     write_json(directory / "approval.json", approval)
     return approval
 
@@ -106,6 +124,8 @@ def package_bytes(directory):
     approval = json.loads((directory / "approval.json").read_bytes())
     if approval.get("package_id") != manifest["package_id"] or approval.get("audience") != manifest["audience"] or not (approval.get("reviewed_all_files") is True or approval.get("confirmed_publish") is True) or set(approval.get("acknowledged_findings", [])) != {finding["id"] for finding in manifest["findings"]}:
         raise ValueError("Current package lacks final privacy approval")
+    if manifest["schema"] == UNVALIDATED_SCHEMA and (approval.get("accept_unvalidated") is not True or approval.get("recovery_id") != manifest["recovery_id"]):
+        raise ValueError("Unvalidated draft lacks its exact-file risk override")
     return _archive(directory, manifest)
 
 

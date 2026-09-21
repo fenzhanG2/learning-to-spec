@@ -1,4 +1,5 @@
 import copy
+import hashlib
 import json
 import tempfile
 import unittest
@@ -7,8 +8,8 @@ from pathlib import Path
 from session_spec.agent_evidence import EvidenceIndex
 from session_spec.agent_handoff import tool_ledger
 from session_spec.agent_package import render_agent_package
-from session_spec.review_crosswalk import MAX_CROSSWALK_CHARS, SCHEMA, TRANSPORT_SCHEMA, review_crosswalk, review_crosswalk_transport
-from session_spec.source_excerpt import MAX_SOURCE_CHARS, source_excerpt, source_payload
+from session_spec.review_crosswalk import MAX_CROSSWALK_CHARS, SCHEMA, review_crosswalk
+from session_spec.source_excerpt import MAX_SOURCE_CHARS, payload_text, source_excerpt, source_payload
 from session_spec.story_article import validate_article
 from session_spec.story_editor import generate_edition
 from test_story_pipeline import FakeBackend, article, brief, edition_review, insights, packet
@@ -25,6 +26,57 @@ def checklist_events():
 
 
 class SourceLocalityTests(unittest.TestCase):
+    def test_complete_payloads_preserve_middle_and_historical_bytes(self):
+        events = packet()
+        events[1]["result"]["content"] += "\n" + "head " * 1200 + "MIDDLE_BOUNDARY" + " tail" * 1200
+        current = render_agent_package(article(), events, "en")
+        self.assertIn(payload_text(source_payload(events[1])), current["evidence.md"])
+        self.assertNotIn("MIDDLE_BOUNDARY", current["agent-spec.md"])
+        for version in ("companion/v5", "companion/v6", "companion/v7"):
+            old = render_agent_package(article(), events, "en", evidence_renderer=version)
+            self.assertEqual(current["agent-spec.md"], old["agent-spec.md"])
+            self.assertEqual(hashlib.sha256(old["agent-spec.md"].encode()).hexdigest(), "82386fdd9da23a416f0da52fa29a8b7ede2f29bee0535d49cd7de7ad4cb0fcaf")
+            self.assertEqual(hashlib.sha256(old["evidence.md"].encode()).hexdigest(), "5881ed13cd5580940f2734698bc27d08e80b639d439f195a1e1ed712488ea948")
+            self.assertNotIn("MIDDLE_BOUNDARY", old["evidence.md"])
+        self.assertTrue(source_excerpt(events[1])["truncated"])
+
+    def test_complete_projection_pairs_and_private_exclusions(self):
+        events = checklist_events()
+        events[1]["result"]["content"] = "prefix " * 1000 + "MIDDLE_PAYLOAD" + " tail" * 1000
+        events[1]["error"] = {"detail": "[REDACTED]"}
+        events[1]["reasoning"] = "PRIVATE_CANARY"
+        events.append({**events[1], "ref": "E000004", "result": {"other": False}})
+        original = copy.deepcopy(events)
+        index = EvidenceIndex(events, tool_ledger(events), "en", portable=True, complete_payloads=True)
+        output = index.companion("[result](evidence.md#e000002) [again](evidence.md#e000002)")
+        for event in (events[0], events[1], events[3]):
+            self.assertIn(payload_text(source_payload(event)), output)
+            self.assertEqual(output.count("### " + event["ref"]), 1)
+        self.assertNotIn("PRIVATE_CANARY", output)
+        self.assertNotIn("Do not install", output)
+        self.assertEqual(events, original)
+        events.append({**events[0], "ref": "E000005"})
+        ambiguous = EvidenceIndex(events, tool_ledger(events), "en", complete_payloads=True).companion("[result](evidence.md#e000002)")
+        self.assertNotIn("### E000001", ambiguous)
+        self.assertNotIn("### E000004", ambiguous)
+
+    def test_complete_projection_scalars_fences_and_policy_errors(self):
+        for value in (0, False, {}, [], None, "", "界\r\n`````\n[REDACTED]"):
+            event = {"ref": "E000001", "type": "tool.execution_start", "arguments": value}
+            output = EvidenceIndex([event], {"calls": []}, "en", complete_payloads=True).companion("[source](evidence.md#e000001)")
+            self.assertIn(payload_text(value), output)
+            if value is None or value == "":
+                self.assertIn("No text payload", output)
+            else:
+                self.assertIn("Complete selected payload", output)
+            if isinstance(value, str) and value:
+                self.assertIn("``````text\n" + value, output)
+        for renderer in ([], "companion/v999"):
+            with self.assertRaisesRegex(ValueError, "Unknown"):
+                render_agent_package(article(), packet(), "en", evidence_renderer=renderer)
+        with self.assertRaisesRegex(ValueError, "conflicts"):
+            render_agent_package(article(), packet(), "en", "handoff-split", evidence_renderer="companion/v8")
+
     def test_companion_preserves_short_checklist_and_pairs_without_enlarging_handoff(self):
         events = checklist_events()
         original = copy.deepcopy(events)
@@ -137,11 +189,7 @@ class SourceLocalityTests(unittest.TestCase):
             receipt = json.loads((root / "edition-receipt.json").read_bytes())
             self.assertEqual(saved["candidate_sha256"], receipt["candidate_sha256"])
             self.assertEqual(receipt["identity"]["review_crosswalk"], SCHEMA)
-            self.assertEqual(receipt["identity"]["review_crosswalk_transport"], TRANSPORT_SCHEMA)
-            transport = review_crosswalk_transport(review_crosswalk(draft, packet()))
-            saved_transport = json.loads((root / "edition-crosswalk-transport-0.json").read_bytes())
-            self.assertEqual(saved_transport, {"candidate_sha256": receipt["candidate_sha256"], **transport})
-            self.assertIn(json.dumps(transport, ensure_ascii=False), backend.prompts[0])
+            self.assertIn(json.dumps(review_crosswalk(draft, packet()), ensure_ascii=False), backend.prompts[0])
 
 
 if __name__ == "__main__":

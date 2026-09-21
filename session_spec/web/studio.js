@@ -1,7 +1,12 @@
 const parameters = new URLSearchParams(location.hash.slice(1));
 const access = parameters.get('access');
 const elements = name => document.getElementById(name);
-const state = { job: null, review: null, choices: {}, manifest: null, plan: null, busy: false, stage: 'source', published: false, generationRetry: false, connectionError: null, durableJobs: null };
+const state = { job: null, review: null, choices: {}, manifest: null, plan: null, busy: false, stage: 'source', published: false, generationRetry: false, connectionError: null, durableJobs: null, downloadSnapshot: null };
+const SNAPSHOT_LIMITS = { fileBytes: 8 * 1024 * 1024, totalBytes: 24 * 1024 * 1024, milliseconds: 15000 };
+const OFFLINE_SNAPSHOT_NOTICE = 'Server status is unknown. Only completed cached exports can be downloaded; generation, upload and retry remain blocked.';
+let downloadEpoch = 0;
+let downloadUrl = null;
+let downloadTimer;
 let planTimer;
 let planSequence = 0;
 function preview(html) {
@@ -12,11 +17,12 @@ const status = (text, error = false) => {
   const authentication = error && /authentication token|bad credentials|authenticate.*copilot|no gh authentication/i.test(diagnostic);
   elements('status').textContent = error && state.connectionError ? state.connectionError : authentication
     ? 'Copilot could not sign in for generation. Check the configured GitHub host/account, then retry. See technical details below.'
-    : error && diagnostic.length > 240 ? 'This step could not finish. See technical details below before retrying.' : diagnostic;
-  elements('status').classList.toggle('error', error);
-  elements('error-details').hidden = !error;
+    : error && diagnostic.length > 240 ? 'This step could not finish. See technical details below before retrying.'
+      : diagnostic + (state.connectionError ? ` ${OFFLINE_SNAPSHOT_NOTICE}` : '');
+  elements('status').classList.toggle('error', error || Boolean(state.connectionError));
+  elements('error-details').hidden = !error && !state.connectionError;
   elements('error-details').open = false;
-  elements('error-text').textContent = error ? diagnostic : '';
+  elements('error-text').textContent = error ? diagnostic : state.connectionError || '';
 };
 function show(stage) {
   state.stage = stage;
@@ -42,7 +48,7 @@ function disconnected() {
     ? 'Restart the manual Studio command. Manual job IDs cannot be reopened through Copilot; use the saved review/generation paths for recovery.'
     : state.durableJobs === true ? `Ask Copilot to reopen learning-to-spec${identifier ? ` job ${identifier}` : ' Studio'}.`
       : `Reopen Studio from Copilot, or restart its manual command.${identifier ? ` Previous job: ${identifier}.` : ''}`;
-  state.connectionError = `Studio connection lost or response incomplete. ${recovery} Check saved status before retrying: an operation may already have started. Unsubmitted choices may need selecting again.`;
+  state.connectionError = `Studio connection lost or response incomplete. ${recovery} Check saved status before retrying: an operation may already have started. Unsubmitted choices may need selecting again. ${OFFLINE_SNAPSHOT_NOTICE}`;
   state.generationRetry = false;
   invalidatePlan();
   return new Error(state.connectionError);
@@ -67,6 +73,115 @@ async function file(name) {
   if (!response.ok) throw new Error((await responseBody(response, 'json')).error || 'File is not available');
   return responseBody(response, 'blob');
 }
+const outputScope = () => ({ job: state.job, epoch: downloadEpoch });
+const currentOutput = scope => scope.job === state.job && scope.epoch === downloadEpoch;
+const currentSnapshot = snapshot => Boolean(snapshot && state.downloadSnapshot === snapshot && currentOutput(snapshot));
+function releaseDownloadUrl() {
+  clearTimeout(downloadTimer);
+  if (downloadUrl) URL.revokeObjectURL(downloadUrl);
+  downloadUrl = null;
+}
+function invalidateDownloads() {
+  downloadEpoch++;
+  state.downloadSnapshot?.controller.abort();
+  state.downloadSnapshot?.blobs.clear();
+  state.downloadSnapshot = null;
+  releaseDownloadUrl();
+  preview('');
+  elements('output-selection').textContent = 'Downloads need preparing.';
+  elements('snapshot-details').textContent = '';
+  updateControls();
+}
+function snapshotStatus(snapshot) {
+  if (!currentSnapshot(snapshot)) return;
+  const missing = [...snapshot.selected].filter(name => !snapshot.blobs.has(name));
+  elements('output-selection').textContent = snapshot.pending
+    ? `Preparing downloads… ${snapshot.blobs.size}/${snapshot.selected.size} ready.`
+    : snapshot.invalidSelection ? 'Some selected downloads are unavailable. See download help.'
+      : missing.length ? `${snapshot.blobs.size}/${snapshot.selected.size} downloads ready. Others unavailable.`
+        : `${snapshot.blobs.size} downloads ready in this tab.`;
+  elements('snapshot-details').textContent = `${snapshot.fileCount} selected files saved locally. ${snapshot.blobs.size}/${snapshot.selected.size} downloads cached in this tab. `
+    + (snapshot.pending ? 'Preparing bounded snapshots… ' : missing.length ? `Incomplete/unavailable: ${missing.join(', ')}. Use saved local files or reopen this job. ` : '')
+    + (snapshot.invalidSelection ? 'Unrecognized reader/file selection was not cached. ' : '')
+    + (!snapshot.binding ? 'Verified generation identity or browser hashing unavailable; reopen this job. ' : '')
+    + 'Cache limits: 8 MiB per file, 24 MiB total, 15 seconds. '
+    + 'Cached downloads are exported snapshots, not live or revalidated server state; they disappear on reload or changed setup/choices/job.';
+  updateControls();
+}
+async function snapshotFile(snapshot, name) {
+  const response = await fetch(`/api/file?job=${encodeURIComponent(snapshot.job)}&name=${encodeURIComponent(name)}`, {
+    headers: { Authorization: `Bearer ${access}`, 'X-Delivery-Snapshot': snapshot.binding.id }, cache: 'no-store', redirect: 'error', signal: snapshot.controller.signal,
+  });
+  if (!currentSnapshot(snapshot) || snapshot.controller.signal.aborted) {
+    response.body?.cancel().catch(() => {});
+    throw new Error('Snapshot changed');
+  }
+  const limit = Math.min(SNAPSHOT_LIMITS.fileBytes, SNAPSHOT_LIMITS.totalBytes - snapshot.bytes);
+  const declared = response.headers?.get('content-length');
+  if (!response.ok || response.headers.get('X-Delivery-Snapshot') !== snapshot.binding.id || !response.body?.getReader || limit <= 0 || declared && (!/^\d+$/.test(declared) || Number(declared) > limit)) {
+    response.body?.cancel().catch(() => {});
+    throw new Error('Snapshot unavailable or over its size limit');
+  }
+  const reader = response.body.getReader();
+  const chunks = [];
+  let bytes = 0;
+  let finished = false;
+  try {
+    for (;;) {
+      const part = await reader.read();
+      if (!currentSnapshot(snapshot) || snapshot.controller.signal.aborted) throw new Error('Snapshot changed or timed out');
+      if (part.done) break;
+      bytes += part.value.byteLength;
+      if (bytes > limit) throw new Error('Snapshot exceeds its size limit');
+      chunks.push(part.value);
+    }
+    if (declared !== null && declared !== undefined && Number(declared) !== bytes) throw new Error('Snapshot response incomplete');
+    const content = new Blob(chunks, { type: response.headers?.get('content-type') || 'application/octet-stream' });
+    const hash = [...new Uint8Array(await crypto.subtle.digest('SHA-256', await content.arrayBuffer()))].map(value => value.toString(16).padStart(2, '0')).join('');
+    if (hash !== snapshot.binding.files[name]) throw new Error('Snapshot file hash does not match the selected generation');
+    finished = true;
+    return content;
+  } finally {
+    if (!finished) reader.cancel().catch(() => {});
+    reader.releaseLock();
+  }
+}
+async function stageSnapshots(snapshot) {
+  const timeout = setTimeout(() => snapshot.controller.abort(), SNAPSHOT_LIMITS.milliseconds);
+  try {
+    for (const name of snapshot.selected) {
+      if (!snapshot.binding || !currentSnapshot(snapshot) || snapshot.controller.signal.aborted || state.connectionError) break;
+      try {
+        const content = await snapshotFile(snapshot, name);
+        if (!currentSnapshot(snapshot) || snapshot.controller.signal.aborted) return;
+        snapshot.blobs.set(name, content);
+        snapshot.bytes += content.size;
+        if (name === 'human-spec.html') {
+          const html = await content.text();
+          if (currentSnapshot(snapshot)) preview(html);
+        }
+      } catch (error) {
+        if (!currentSnapshot(snapshot)) return;
+        snapshot.errors.set(name, error.message);
+        if (error instanceof TypeError && !snapshot.controller.signal.aborted) status(disconnected().message, true);
+      }
+      snapshotStatus(snapshot);
+    }
+  } finally {
+    clearTimeout(timeout);
+    snapshot.pending = false;
+    snapshotStatus(snapshot);
+  }
+}
+function downloadSnapshot(name) {
+  const snapshot = state.downloadSnapshot;
+  if (state.busy || !currentSnapshot(snapshot) || !snapshot.selected.has(name) || !snapshot.blobs.has(name)) return;
+  releaseDownloadUrl();
+  downloadUrl = URL.createObjectURL(snapshot.blobs.get(name));
+  const link = node('a'); link.href = downloadUrl; link.download = name; document.body.append(link); link.click(); link.remove();
+  downloadTimer = setTimeout(releaseDownloadUrl, 60000);
+  status(`Cached export snapshot download requested: ${name}. No server contact or revalidation. Check your browser downloads.`);
+}
 function updateControls() {
   const findings = state.review?.findings || [];
   const remaining = findings.filter(finding => {
@@ -80,6 +195,10 @@ function updateControls() {
   elements('generate').textContent = state.generationRetry ? 'Retry generation →' : 'Generate spec →';
   const unresolved = [...document.querySelectorAll('[data-finding]')].some(control => control.value !== 'keep');
   elements('publish').disabled = !state.plan || unavailable || unresolved || state.published;
+  for (const button of document.querySelectorAll('[data-file]')) {
+    button.disabled = state.busy || !currentSnapshot(state.downloadSnapshot) || !state.downloadSnapshot.blobs.has(button.dataset.file);
+    button.title = button.disabled ? 'No complete bounded snapshot is available for this file.' : 'Download cached export snapshot; no live server revalidation.';
+  }
 }
 async function perform(operation) {
   if (state.busy || state.connectionError) return;
@@ -99,6 +218,7 @@ function action(identifier, operation) {
   elements(identifier).addEventListener('click', () => perform(operation));
 }
 function rememberJob(identifier) {
+  invalidateDownloads();
   state.job = identifier;
   parameters.set('job', identifier);
   history.replaceState(null, '', `#${parameters}`);
@@ -124,15 +244,18 @@ function invalidatePlan() {
 function renderFindings() {
   const review = state.review;
   elements('findings').replaceChildren();
+  const contextual = review.semantic?.status === 'reviewed';
   elements('review-summary').textContent = review.findings.length
     ? `${review.findings.length} details to consider. Choose what belongs in your spec.`
-    : 'No additional details were flagged. You can generate, or add a phrase in setup.';
+    : contextual
+      ? 'Contextual review flagged no additional details. This does not establish that sharing is safe; indirect disclosures can still be missed.'
+      : 'Local checks flagged no additional details. Indirect personal disclosures may still be present. For deeper review, change Privacy scan in setup.';
   elements('review-toolbar').hidden = review.findings.length < 2;
   elements('scan-details').textContent = `${Object.values(review.hard_removals || {}).reduce((sum, value) => sum + value, 0)} automatic removal matches/fields (overlaps possible). Contextual review: ${review.semantic?.status || 'not requested'}. ${review.semantic?.coverage || ''}`;
   const visible = review.findings.filter(finding => elements('filter').value !== 'unresolved' || !state.choices[finding.id]?.action);
   if (!visible.length) {
     const empty = node('div', undefined, 'empty');
-    empty.append(node('strong', review.findings.length ? 'All details have a choice' : 'Ready for the next step'), node('p', 'The technical story stays intact. No anonymity guarantee.', 'hint'));
+    empty.append(node('strong', review.findings.length ? 'All details have a choice' : 'No findings is not a privacy clearance'), node('p', 'Check that your choices preserve technical failures, corrections and constraints. Detection is not an anonymity guarantee.', 'hint'));
     elements('findings').append(empty);
   }
   for (const finding of visible) {
@@ -154,6 +277,7 @@ function renderFindings() {
     replacement.value = state.choices[finding.id]?.replacement || finding.alternative || '';
     replacement.hidden = choice.value !== 'generalize';
     const changed = () => {
+      invalidateDownloads();
       state.generationRetry = false;
       state.choices[finding.id] = { action: choice.value, replacement: replacement.value };
       replacement.hidden = choice.value !== 'generalize';
@@ -163,9 +287,10 @@ function renderFindings() {
     choice.addEventListener('change', changed);
     replacement.addEventListener('input', changed);
     const details = node('details');
-    details.append(node('summary', 'Context & detection details'), node('p', `Task relevance: ${finding.necessity} · ${finding.detectors.join(' + ')} detection`));
+    details.append(node('summary', 'Context & detection details'), node('p', `Assessed task relevance: ${finding.necessity} · ${finding.detectors.join(' + ')} detection`));
+    if (finding.assessment_summary) details.append(node('p', finding.assessment_summary.notice));
     for (const context of finding.contexts || []) details.append(node('pre', context));
-    for (const context of finding.related_contexts || []) details.append(node('p', `Related clue · Event ${context.event}`), node('pre', context.text));
+    for (const context of finding.related_contexts || []) details.append(node('p', `Related clue (context only) · Event ${context.event} · ${JSON.stringify(context.field)}`), node('pre', context.text));
     card.append(choice, replacement, details);
     elements('findings').append(card);
   }
@@ -193,7 +318,11 @@ elements('audience').addEventListener('change', async () => {
 });
 elements('detection').addEventListener('change', () => { elements('semantic-notice').hidden = elements('detection').value !== 'copilot'; });
 elements('filter').addEventListener('change', renderFindings);
+for (const identifier of ['session', 'readers', 'delivery', 'audience', 'team', 'purpose', 'detection', 'custom']) {
+  for (const event of ['input', 'change']) elements(identifier).addEventListener(event, invalidateDownloads);
+}
 action('scan', async () => {
+  invalidateDownloads();
   for (const identifier of ['session', 'readers', 'delivery']) if (!elements(identifier).value) throw new Error('Please choose ' + ({ session: 'a session', readers: 'your readers', delivery: 'a destination' })[identifier] + '.');
   const delivery = elements('delivery').value;
   const audience = delivery === 'local' ? 'local' : elements('audience').value === 'team' ? `team:${elements('team').value.trim()}` : elements('audience').value;
@@ -207,15 +336,20 @@ action('scan', async () => {
   renderFindings(); show('review'); status(elements('detection').value === 'copilot' ? 'Privacy check finished, including the Copilot review you selected.' : 'Privacy checked locally. Nothing sent to a model.');
 });
 action('change-source', async () => {
+  invalidateDownloads();
   show('source');
   status('Edit the setup, then check privacy again. Your previous job is saved.');
 });
 action('generate', async () => {
+  invalidateDownloads();
+  const scope = outputScope();
   try {
     const started = await request('/api/generate', { job: state.job, review_id: state.review.review_id, choices: state.choices, confirmed: true });
+    if (!currentOutput(scope)) return;
     invalidatePlan(); state.manifest = null; state.published = false;
     const result = started.completed ? await request(`/api/status?job=${state.job}`) : await waitJob('Writing and checking your spec');
-    await renderOutput(result.delivery_result || result.result);
+    if (!currentOutput(scope)) return;
+    renderOutput(result.delivery_result || result.result, scope);
     state.generationRetry = false;
     show('output'); status('Saved on your computer. Nothing uploaded.');
   } catch (error) {
@@ -223,26 +357,39 @@ action('generate', async () => {
     throw error;
   }
 });
-async function renderOutput(result) {
-  const selected = result.files || [];
-  for (const button of document.querySelectorAll('[data-file]')) button.hidden = button.dataset.file !== 'deliverables.zip' && !selected.includes(button.dataset.file);
+function renderOutput(result, scope = outputScope()) {
+  if (!currentOutput(scope)) return;
+  state.downloadSnapshot?.controller.abort();
+  state.downloadSnapshot?.blobs.clear();
+  releaseDownloadUrl();
+  preview('');
+  const readers = result.preferences?.readers;
+  const allowed = ['human', 'agent', 'both'].includes(readers) ? ['evidence.md',
+    ...(['human', 'both'].includes(readers) ? ['human-spec.html'] : []),
+    ...(['agent', 'both'].includes(readers) ? ['agent-spec.md'] : [])] : [];
+  const listed = Array.isArray(result.files) ? result.files : [];
+  const selected = [...new Set(listed.filter(name => allowed.includes(name)))];
+  const validSelection = selected.length > 0 && listed.length === selected.length;
+  const binding = result.snapshot;
+  const boundNames = validSelection ? [...selected, 'deliverables.zip'] : selected;
+  const validBinding = binding && /^[a-f0-9]{64}$/.test(binding.id) && binding.files && typeof globalThis.crypto?.subtle?.digest === 'function'
+    && Object.keys(binding.files).length === boundNames.length && boundNames.every(name => /^[a-f0-9]{64}$/.test(binding.files[name]));
+  const snapshot = { ...scope, selected: new Set(validSelection ? [...selected, 'deliverables.zip'] : selected),
+    binding: validBinding ? { id: binding.id, files: { ...binding.files } } : null,
+    blobs: new Map(), errors: new Map(), bytes: 0, fileCount: selected.length, invalidSelection: !validSelection,
+    pending: true, controller: new AbortController() };
+  state.downloadSnapshot = snapshot;
+  for (const button of document.querySelectorAll('[data-file]')) button.hidden = !snapshot.selected.has(button.dataset.file);
   elements('open-agent').hidden = !selected.includes('agent-spec.md');
   elements('human-preview-panel').hidden = !selected.includes('human-spec.html');
   elements('output-path').textContent = result.output;
-  elements('output-selection').textContent = `${selected.length} files saved locally.` + (selected.includes('agent-spec.md') ? ' Keep the Agent handoff and evidence together.' : ' Your HTML story is ready to read.');
-  if (selected.includes('human-spec.html')) preview(await (await file('human-spec.html')).text());
-  elements('prepare-share').hidden = result.preferences.destination !== 'artifactstore';
+  elements('prepare-share').hidden = result.preferences?.destination !== 'artifactstore';
   elements('prepare-share').textContent = state.published ? 'View upload' : 'Upload to ArtifactStore →';
+  snapshotStatus(snapshot);
+  snapshot.ready = stageSnapshots(snapshot);
 }
-for (const button of document.querySelectorAll('[data-file]')) button.addEventListener('click', () => perform(async () => {
-  const name = button.dataset.file;
-  const content = await file(name);
-  const url = URL.createObjectURL(content);
-  const link = node('a'); link.href = url; link.download = name; document.body.append(link); link.click(); link.remove();
-  setTimeout(() => URL.revokeObjectURL(url), 60000);
-  status(`Download requested: ${name}. Check your browser downloads, or use Local files & download help.`);
-}));
-action('revise', async () => { invalidatePlan(); renderFindings(); show('review'); status('Update the details you want to change, then generate again.'); });
+for (const button of document.querySelectorAll('[data-file]')) button.addEventListener('click', () => downloadSnapshot(button.dataset.file));
+action('revise', async () => { invalidateDownloads(); invalidatePlan(); renderFindings(); show('review'); status('Update the details you want to change, then generate again.'); });
 action('back-output', async () => { invalidatePlan(); show('output'); });
 for (const [identifier, name] of [['open-agent', 'agent-spec.md'], ['open-folder', 'folder']]) action(identifier, async () => {
   await request('/api/open', { job: state.job, name });
@@ -290,7 +437,7 @@ function renderShare(manifest) {
       const option = node('option', label); option.value = value; choice.append(option);
     }
     choice.addEventListener('change', () => {
-      if (choice.value === 'revise') { invalidatePlan(); renderFindings(); show('review'); }
+      if (choice.value === 'revise') { invalidateDownloads(); invalidatePlan(); renderFindings(); show('review'); }
       updateControls();
     });
     row.append(node('strong', finding.category), node('p', `${finding.file}: ${finding.text}`), choice);
@@ -357,17 +504,22 @@ async function refreshJobs() {
 async function reopenJob(identifier) {
   if (!identifier) return;
   rememberJob(identifier); invalidatePlan(); state.manifest = null; state.review = null; state.choices = {}; state.published = false; state.generationRetry = false;
+  const scope = outputScope();
   elements('site-name').value = '';
   let job = await request(`/api/status?job=${identifier}`);
+  if (!currentOutput(scope)) return;
   if (job.status === 'running') {
     show(job.stage === 'scan' ? 'source' : 'review');
     try { job = await waitJob('Continuing your saved work'); }
     catch { job = await request(`/api/status?job=${identifier}`); }
   }
+  if (!currentOutput(scope)) return;
   if (job.stage === 'scan' && job.status === 'error') {
     show('source'); status(job.error, true); return;
   }
-  state.review = await request(`/api/review?job=${identifier}`);
+  const review = await request(`/api/review?job=${identifier}`);
+  if (!currentOutput(scope)) return;
+  state.review = review;
   state.choices = job.approved_choices?.choices || {};
   state.generationRetry = job.stage === 'generate' && job.status === 'error';
   elements('filter').value = 'all';
@@ -379,11 +531,11 @@ async function reopenJob(identifier) {
   elements('team').value = state.review.audience?.startsWith('team:') ? state.review.audience.slice(5) : '';
   updateAudience();
   if (job.publication_attempted) {
-    if (job.delivery_result) await renderOutput(job.delivery_result);
+    if (job.delivery_result) renderOutput(job.delivery_result, scope);
     renderPublication(job.result, job.error); show('share'); status('Restored upload history. No automatic retry.'); return;
   }
   if (job.status === 'done' && job.delivery_result) {
-    await renderOutput(job.delivery_result); show('output'); status('Reopened saved files. No model call or upload.');
+    renderOutput(job.delivery_result, scope); show('output'); status('Reopened saved files. No model call or upload.');
   } else {
     const restored = Object.keys(state.choices).length ? 'Your saved choices are ready to continue.'
       : state.review.findings.length ? 'Choose how to handle each flagged detail before generating.' : 'Privacy check is ready. No additional details need a choice.';

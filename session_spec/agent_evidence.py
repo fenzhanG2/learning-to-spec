@@ -1,7 +1,7 @@
 import json
 import re
 
-from .source_excerpt import fenced_text, source_excerpt
+from .source_excerpt import fenced_text, payload_text, source_excerpt, source_payload
 
 
 def short_text(value, limit):
@@ -24,14 +24,15 @@ def argument_focus(arguments):
 
 
 class EvidenceIndex:
-    def __init__(self, events, ledger, language, legacy_roles=False, portable=False, payload_aware=False, complete_short=False):
+    def __init__(self, events, ledger, language, legacy_roles=False, portable=False, payload_aware=False, complete_short=False, complete_payloads=False):
         self.events = {event["ref"]: event for event in events}
         self.calls = {}
         self.language = language
         self.legacy_roles = legacy_roles
         self.portable = portable
         self.payload_aware = payload_aware
-        self.complete_short = complete_short
+        self.complete_short = complete_short or complete_payloads
+        self.complete_payloads = complete_payloads
         for call in ledger["calls"]:
             for ref in [call["request_ref"], *[event["ref"] for event in call["results"]]]:
                 self.calls[ref] = call
@@ -157,7 +158,11 @@ class EvidenceIndex:
             title, context, excerpt, state = self.describe(ref)
             event = self.events[ref]
             if self.complete_short:
-                payload = source_excerpt(event)
+                if self.complete_payloads:
+                    text = payload_text(source_payload(event))
+                    payload = {"characters": len(text), "truncated": False, "segments": [{"text": text}]}
+                else:
+                    payload = source_excerpt(event)
                 lines.extend(["### " + ref, "", context + (" · turn " + str(event["turn"]) if event.get("turn") else ""), "", state, ""])
                 call = self.calls.get(ref)
                 if call and call["results"]:
@@ -204,7 +209,7 @@ def validate_usage(detail, events, ledger):
     return errors
 
 
-def handoff_phase(phase, index):
+def handoff_phase(phase, index, scoped_citations=False, claim_only=False):
     label = index.label
     lines = ["### " + phase["id"] + " — " + phase["title"], "", phase["summary"], ""]
     for number, step in enumerate(phase["tool_steps"], 1):
@@ -215,8 +220,13 @@ def handoff_phase(phase, index):
                       "   **" + label("Decision", "决策") + "**: " + step["decision"], ""])
     rationale = phase["rationale"]
     if rationale["basis"] != "not_recorded":
-        lines.extend([label("Rationale", "依据") + " [" + rationale["basis"] + "]: " + rationale["text"], ""])
+        rationale_sources = " (" + index.cite(rationale["refs"]) + ")" if scoped_citations else ""
+        lines.extend([label("Rationale", "依据") + " [" + rationale["basis"] + "]: " + rationale["text"] + rationale_sources, ""])
+    phase_sources = ([*phase["refs"], *phase["human_refs"]] if scoped_citations else
+                     [*phase["human_refs"], *phase["refs"], *rationale["refs"]])
+    if claim_only:
+        phase_sources = phase["refs"]
     lines.extend([label("Outcome", "结果") + " [" + phase["outcome"] + "]: " + phase["observation"], "",
                   label("Next state: ", "后续状态：") + phase["next_state"], "",
-                  label("Selected evidence: ", "关键来源：") + index.cite([*phase["human_refs"], *phase["refs"], *rationale["refs"]]), ""])
+                  label("Selected evidence: ", "关键来源：") + index.cite(phase_sources), ""])
     return lines

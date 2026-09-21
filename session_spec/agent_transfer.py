@@ -8,28 +8,31 @@ def validate_transfer(detail, events):
     evidence = {event["ref"]: event for event in events}
     errors = []
 
-    def fields(value, required, label):
+    def fields(value, required, label, pointer=""):
+        location = " at " + pointer if pointer else ""
         if not isinstance(value, dict):
-            errors.append(label + " must be an object")
+            errors.append(label + " must be an object" + location)
             return False
         for field in required:
             if not isinstance(value.get(field), str) or not value[field].strip():
-                errors.append(label + " needs " + field)
+                errors.append(label + " needs " + field + location)
         refs = value.get("refs")
         if not isinstance(refs, list) or not refs or any(not isinstance(ref, str) or ref not in evidence for ref in refs):
-            errors.append(label + " needs real source refs")
+            errors.append(label + " needs real source refs" + location
+                          + ("; refs is missing: replace this existing parent object, preserving its other fields" if "refs" not in value else ""))
         return True
 
-    fields(detail.get("resume"), ("checkpoint", "workspace", "next_action", "verification_boundary"), "Agent resume")
+    fields(detail.get("resume"), ("checkpoint", "workspace", "next_action", "verification_boundary"), "Agent resume", "/article/agent_detail/resume")
     for section in ("continuation", "recipes"):
         items = detail.get(section)
         if not isinstance(items, list):
             errors.append("Agent " + section + " must be an array; empty is valid when unsupported")
             continue
-        for item in items:
+        for item_index, item in enumerate(items):
+            pointer = f"/article/agent_detail/{section}/{item_index}"
             required = (("title", "trigger", "done_when", "stop_when") if section == "continuation"
                         else ("title", "when", "adapt", "avoid", "verify"))
-            if not fields(item, required, "Agent " + section):
+            if not fields(item, required, "Agent " + section, pointer):
                 continue
             if item.get("basis") not in {"explicit", "proposed"}:
                 errors.append("Agent " + section + " basis must be explicit or proposed; reuse is not a future success guarantee")
@@ -42,8 +45,8 @@ def validate_transfer(detail, events):
                 if not isinstance(steps, list) or not steps:
                     errors.append("Agent continuation needs concrete steps")
                     continue
-                for step in steps:
-                    if fields(step, ("action", "precondition", "expected", "otherwise"), "Agent continuation step"):
+                for step_index, step in enumerate(steps):
+                    if fields(step, ("action", "precondition", "expected", "otherwise"), "Agent continuation step", f"{pointer}/steps/{step_index}"):
                         if step.get("kind") not in {"inspect", "verify", "change", "external"}:
                             errors.append("Agent continuation step kind must be inspect/verify/change/external")
     requests = Counter(event.get("tool_call_id") for event in events if event.get("type") == "tool.execution_start" and event.get("tool_call_id"))
@@ -148,8 +151,10 @@ def decision_phase(phase, ledger, label):
 
 
 def render_transfer(article, events, ledger, language, trajectory_style="decisions"):
-    payload_aware = trajectory_style in {"handoff-portable-v2", "handoff-portable-v3"}
-    portable = trajectory_style in {"handoff-portable", "handoff-portable-v2", "handoff-portable-v3"}
+    claim_only = trajectory_style == "handoff-portable-v5"
+    scoped_citations = trajectory_style in {"handoff-portable-v4", "handoff-portable-v5"}
+    payload_aware = trajectory_style in {"handoff-portable-v2", "handoff-portable-v3", "handoff-portable-v4", "handoff-portable-v5"}
+    portable = trajectory_style in {"handoff-portable", "handoff-portable-v2", "handoff-portable-v3", "handoff-portable-v4", "handoff-portable-v5"}
     separate = trajectory_style == "handoff-split" or portable
     if separate:
         trajectory_style = "handoff"
@@ -209,7 +214,7 @@ def render_transfer(article, events, ledger, language, trajectory_style="decisio
     plan = inline_tool_plan(detail, events, ledger) if trajectory_style == "expanded" else [None] * len(detail["trajectory"])
     for phase, placement in zip(detail["trajectory"], plan):
         if evidence_index:
-            lines.extend(handoff_phase(phase, evidence_index))
+            lines.extend(handoff_phase(phase, evidence_index, scoped_citations=scoped_citations, claim_only=claim_only))
             continue
         if trajectory_style == "decisions":
             lines.extend(decision_phase(phase, ledger, label))

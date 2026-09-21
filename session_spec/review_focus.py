@@ -1,7 +1,53 @@
 import re
 
+from .story_grounding import pointer_value
 
-SCHEMA = "review-focus/v4"
+
+SCHEMA = "review-focus/v6"
+
+
+def comparison_groups(edition):
+    article = edition.get("article", {})
+    detail = article.get("agent_detail", {})
+    agent_sections = ["/article/agent_markdown"] + ["/article/agent_detail/" + field for field in
+                      ("resume", "continuation", "recipes", "trajectory", "paths")]
+    modality = ["/brief/goals", "/brief/non_goals", "/brief/constraints", "/article/checks",
+                "/article/chapters", "/insights/closing/paragraphs", *agent_sections]
+    commission = ["/brief/goals", "/brief/constraints", "/article/agent_markdown"]
+    resumption = ["/article/agent_detail/resume/next_action", "/article/agent_detail/resume/workspace",
+                  "/article/agent_detail/resume/verification_boundary", "/insights/closing/paragraphs"]
+    resumption.extend(f"/article/chapters/{index}/markdown" for index in range(len(article.get("chapters", []))))
+    for index, route in enumerate(detail.get("continuation", [])):
+        base = f"/article/agent_detail/continuation/{index}"
+        commission.extend(base + "/" + field for field in ("basis", "trigger", "done_when", "stop_when", "refs"))
+        resumption.extend(base + "/" + field for field in ("trigger", "done_when", "stop_when"))
+        if route.get("steps"):
+            resumption.extend(base + "/steps/0/" + field for field in ("kind", "action", "precondition", "expected", "otherwise"))
+    relevance = ["/article/human_input_coverage"]
+    decisions = []
+    for index, phase in enumerate(detail.get("trajectory", [])):
+        base = f"/article/agent_detail/trajectory/{index}"
+        relevance.extend(base + "/" + field for field in ("summary", "human_refs", "refs"))
+        for step in range(len(phase.get("tool_steps", []))):
+            decisions.extend(base + f"/tool_steps/{step}/" + field for field in ("finding", "decision", "refs"))
+    groups = []
+    for check, category, paths in (("commission_vs_design", "acceptance_scope", commission),
+                                   ("first_move_and_human_continuation", "agent_handoff", resumption),
+                                   ("accounting_vs_narrative", "narrative_and_scope", relevance),
+                                   ("observed_vs_inferred_decisions", "evidence_strength", decisions),
+                                   ("source_modality_and_coverage", "acceptance_scope", modality),
+                                   ("agent_section_responsibilities", "readability", agent_sections)):
+        present, missing = [], []
+        for path in paths:
+            try:
+                pointer_value(edition, path)
+            except ValueError:
+                missing.append(path)
+            else:
+                present.append(path)
+        if present:
+            groups.append({"check": check, "category": category, "paths": present, "missing_paths": missing})
+    return groups
 
 
 def review_focus(edition):
@@ -43,4 +89,4 @@ def review_focus(edition):
     for root in ("article", "insights", "brief"):
         visit(edition.get(root, {}), "/" + root)
     return {"schema": SCHEMA, "short_claims": short_claims, "handoff_conditions": handoff_conditions,
-            "mechanism_summaries": mechanism_summaries}
+            "mechanism_summaries": mechanism_summaries, "comparison_groups": comparison_groups(edition)}

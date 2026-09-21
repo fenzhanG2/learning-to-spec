@@ -5,10 +5,12 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+from session_spec.agent_package import render_agent_package
+from session_spec.storage import digest
 from session_spec.storage import write_json
 from session_spec.story_editor import generate_edition, validate_feedback
 from session_spec.story_pipeline import validate_article
-from session_spec.transfer_probe import (effective_feedback, fingerprint, run_probe, validate_probe,
+from session_spec.transfer_probe import (effective_feedback, final_pair_matches, fingerprint, run_probe, validate_probe,
                                          validate_record, validate_resolutions)
 from test_story_pipeline import FakeBackend, article, brief, edition_review, insights, packet, transfer_review
 
@@ -35,6 +37,66 @@ def review_with_resolution(index=0, status="not_applicable", issues=None):
 
 
 class TransferProbeTests(unittest.TestCase):
+    def test_complete_pair_boundary_and_failed_attempt_do_not_add_calls(self):
+        events = packet()
+        documents = render_agent_package(article(), events, "en")
+        events[1]["result"]["content"] += "x" * (240000 - sum(map(len, documents.values())))
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            backend = FakeBackend([transfer_review()])
+            record = run_probe(draft(), events, backend, directory, language="en")
+            self.assertEqual(sum(map(len, record["documents"].values())), 240000)
+            self.assertEqual(len(backend.calls), 1)
+            self.assertIn(events[1]["result"]["content"], record["documents"]["evidence.md"])
+            events[1]["result"]["content"] += "x"
+            backend = FakeBackend([])
+            with self.assertRaisesRegex(ValueError, "no silent truncation"):
+                run_probe(draft(), events, backend, directory, language="en")
+            events[1]["result"]["content"] += "x" * 10000
+            with self.assertRaisesRegex(ValueError, "no silent truncation"):
+                generate_edition(directory, draft(), events, backend, validate_article, transfer_probe=True)
+            self.assertEqual(backend.calls, [])
+            self.assertFalse((directory / "edition.json").exists())
+            self.assertEqual(json.loads((directory / "edition-attempt.json").read_bytes())["status"], "failed")
+
+    def test_recorded_renderer_reproduces_old_pair_and_detects_middle_tamper(self):
+        events = packet()
+        events[1]["result"]["content"] += "prefix " * 1000 + "MIDDLE_BOUNDARY" + " suffix" * 1000
+        for renderer in ("companion/v5", "companion/v6", "companion/v7", "companion/v8"):
+            with self.subTest(renderer=renderer), tempfile.TemporaryDirectory() as temporary:
+                documents = render_agent_package(article(), events, "en", evidence_renderer=renderer)
+                with patch("session_spec.transfer_probe.render_agent_package", return_value=documents), patch("session_spec.transfer_probe.EVIDENCE_RENDERER", renderer):
+                    record = run_probe(draft(), events, FakeBackend([transfer_review()]), Path(temporary), language="en")
+                self.assertEqual(validate_record(record, events), [])
+                self.assertTrue(final_pair_matches(record, draft(), events, "en"))
+                if renderer == "companion/v8":
+                    record["documents"]["evidence.md"] = record["documents"]["evidence.md"].replace("MIDDLE_BOUNDARY", "ALTERED_MIDDLE")
+                    self.assertTrue(validate_record(record, events))
+                    record["identity"]["documents"]["evidence.md"] = digest(record["documents"]["evidence.md"].encode())
+                    self.assertFalse(final_pair_matches(record, draft(), events, "en"))
+
+    def test_manual_edition_opt_out_stays_unprobed(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            backend = FakeBackend([edition_review()])
+            generate_edition(Path(temporary), draft(), packet(), backend, validate_article, transfer_probe=False)
+            receipt = json.loads((Path(temporary) / "edition-receipt.json").read_bytes())
+            self.assertNotIn("transfer_probe", receipt["identity"])
+            self.assertNotIn("final_transfer_policy", receipt["identity"])
+            self.assertEqual(len(backend.calls), 1)
+
+    def test_probe_accepts_versioned_citations_but_not_unknown_renderers(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            record = run_probe(draft(), packet(), FakeBackend([transfer_review()]), Path(temporary))
+            self.assertEqual(record["identity"]["renderer"], "companion/v8")
+            self.assertEqual(validate_record(record, packet()), [])
+            for renderer in ("companion/v5", "companion/v6", "companion/v7"):
+                record["identity"]["renderer"] = renderer
+                self.assertEqual(validate_record(record, packet()), [])
+            for renderer in ("companion/v999", [], {}, None, 6, True):
+                with self.subTest(renderer=renderer):
+                    record["identity"]["renderer"] = renderer
+                    self.assertIn("Transfer probe candidate or contract binding is invalid", validate_record(record, packet()))
+
     def test_reader_gets_only_the_delivered_pair_and_no_full_source_or_human_draft(self):
         events = packet() + [{"ref": "E000099", "type": "assistant.message", "text": "UNSELECTED_SOURCE_CANARY"}]
         candidate = draft()
@@ -77,6 +139,8 @@ class TransferProbeTests(unittest.TestCase):
             record = run_probe(draft(), packet(), backend, directory)
             self.assertEqual(len(record["attempts"]), 2)
             self.assertTrue(record["attempts"][0]["errors"])
+            self.assertIn("Actual source line", " ".join(record["attempts"][0]["errors"]))
+            self.assertIn("not an automatic replacement", backend.prompts[-1])
             self.assertEqual([item["label"] for item in backend.calls], ["story-transfer-probe", "story-transfer-probe-citation-retry"])
             backend = FakeBackend([bad, bad])
             with self.assertRaisesRegex(ValueError, "bounded citation"):
@@ -107,8 +171,8 @@ class TransferProbeTests(unittest.TestCase):
             self.assertEqual(len(backend.calls), 2)
             receipt = json.loads((directory / "edition-receipt.json").read_bytes())
             self.assertEqual(receipt["review"]["feedback_resolution"][0]["status"], "not_applicable")
-            self.assertEqual(len(effective_feedback(receipt, [], packet())), 1)
-            self.assertIn("First candidate entering source review", receipt["transfer_probe"]["scope"])
+            self.assertEqual(len(effective_feedback(receipt, [], packet(), actual)), 1)
+            self.assertIn("exact delivered pair", receipt["transfer_probe"]["scope"])
             cached = FakeBackend([])
             self.assertEqual(generate_edition(directory, draft(), packet(), cached, validate_article, transfer_probe=True), draft())
             self.assertEqual(cached.calls, [])
@@ -122,7 +186,7 @@ class TransferProbeTests(unittest.TestCase):
             backend = FakeBackend([transfer_review([finding()]), accepted])
             generate_edition(directory, draft(), packet(), backend, validate_article, feedback=feedback, transfer_probe=True)
             receipt = json.loads((directory / "edition-receipt.json").read_bytes())
-            self.assertEqual(effective_feedback(receipt, feedback, packet())[0], feedback[0])
+            self.assertEqual(effective_feedback(receipt, feedback, packet(), draft())[0], feedback[0])
             self.assertEqual(receipt["effective_feedback"][1]["origin"], "transfer-probe/v1")
             cached = FakeBackend([])
             generate_edition(directory, draft(), packet(), cached, validate_article, feedback=feedback, transfer_probe=True)
@@ -130,12 +194,12 @@ class TransferProbeTests(unittest.TestCase):
             corrupt = copy.deepcopy(receipt)
             corrupt["effective_feedback"].pop()
             with self.assertRaisesRegex(ValueError, "effective reader feedback"):
-                effective_feedback(corrupt, feedback, packet())
+                effective_feedback(corrupt, feedback, packet(), draft())
             receipt["review"]["feedback_resolution"].pop()
             write_json(directory / "edition-receipt.json", receipt)
-            restarted = FakeBackend([transfer_review([finding()]), accepted])
+            restarted = FakeBackend([accepted])
             generate_edition(directory, draft(), packet(), restarted, validate_article, feedback=feedback, transfer_probe=True)
-            self.assertEqual(len(restarted.calls), 2)
+            self.assertEqual(len(restarted.calls), 1)
 
     def test_unsubstantiated_dismissal_cannot_pass_the_review(self):
         invalid = review_with_resolution()
@@ -152,7 +216,7 @@ class TransferProbeTests(unittest.TestCase):
             with self.subTest(resolutions=malformed):
                 self.assertTrue(validate_resolutions({"feedback_resolution": malformed}, [{"origin": "transfer-probe/v1"}], draft(), packet(), ""))
 
-    def test_repaired_candidate_is_source_checked_without_claiming_a_second_probe(self):
+    def test_human_only_repair_reuses_an_unchanged_agent_pair(self):
         issue = {"reason": "Clarify the bounded state"}
         failed = review_with_resolution(status="needs_fix", issues=[issue])
         passed = review_with_resolution(status="fixed")
@@ -167,6 +231,69 @@ class TransferProbeTests(unittest.TestCase):
             self.assertEqual(receipt["transfer_probe"]["identity"]["candidate_sha256"], fingerprint(draft()))
             self.assertNotEqual(fingerprint(actual), fingerprint(draft()))
             self.assertEqual(receipt["calls"], backend.calls)
+
+    def test_changed_final_pair_is_probed_and_new_findings_are_adjudicated_before_editing(self):
+        issue = {"reason": "Clarify the bounded state"}
+        original = draft()
+        changed_markdown = original["article"]["agent_markdown"] + "\n先核对当前状态 [E000002]。"
+        backend = FakeBackend([
+            transfer_review(), edition_review([issue]),
+            {"patches": [{"op": "replace", "path": "/article/agent_markdown", "value": changed_markdown}]},
+            edition_review(), transfer_review([finding()]), review_with_resolution(),
+        ])
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            actual = generate_edition(directory, original, packet(), backend, validate_article, transfer_probe=True)
+            labels = [item["label"] for item in backend.calls]
+            self.assertEqual(labels.count("story-transfer-probe"), 2)
+            self.assertEqual(labels.count("story-edition-patch"), 1)
+            self.assertEqual(labels[-1], "story-edition-review")
+            receipt = json.loads((directory / "edition-receipt.json").read_bytes())
+            self.assertEqual(len(receipt["followup_transfer_probes"]), 1)
+            self.assertEqual(len(effective_feedback(receipt, [], packet(), actual)), 1)
+            stale = copy.deepcopy(receipt)
+            stale["followup_transfer_probes"] = []
+            with self.assertRaisesRegex(ValueError, "Final delivered pair"):
+                effective_feedback(stale, [], packet(), actual)
+            changed = copy.deepcopy(actual)
+            changed["article"]["agent_markdown"] += "Further unreviewed change"
+            with self.assertRaisesRegex(ValueError, "Final delivered pair"):
+                effective_feedback(receipt, [], packet(), changed)
+
+    def test_final_probe_budget_failure_never_publishes_a_repaired_pair(self):
+        changed_markdown = draft()["article"]["agent_markdown"] + "\n先核对当前状态 [E000002]。"
+        backend = FakeBackend([
+            transfer_review(), edition_review([{"reason": "Clarify the bounded state"}]),
+            {"patches": [{"op": "replace", "path": "/article/agent_markdown", "value": changed_markdown}]},
+            edition_review(), ValueError("Model-call budget exhausted"),
+        ])
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            with self.assertRaisesRegex(ValueError, "budget exhausted"):
+                generate_edition(directory, draft(), packet(), backend, validate_article, transfer_probe=True)
+            self.assertFalse((directory / "edition.json").exists())
+            self.assertEqual(json.loads((directory / "edition-attempt.json").read_bytes())["status"], "failed")
+
+    def test_final_reader_regression_is_fixed_and_the_new_pair_is_checked_again(self):
+        original = draft()
+        first = original["article"]["agent_markdown"] + "\n先核对状态 [E000002]。"
+        final = original["article"]["agent_markdown"] + "\n先核对状态与权限 [E000002]。"
+        backend = FakeBackend([
+            transfer_review(), edition_review([{"reason": "Initial correction"}]),
+            {"patches": [{"op": "replace", "path": "/article/agent_markdown", "value": first}]},
+            edition_review(), transfer_review([finding()]),
+            review_with_resolution(status="needs_fix", issues=[{"reason": "Final reader found a real regression"}]),
+            {"patches": [{"op": "replace", "path": "/article/agent_markdown", "value": final}]},
+            review_with_resolution(status="fixed"), transfer_review(),
+        ])
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            actual = generate_edition(directory, original, packet(), backend, validate_article, transfer_probe=True)
+            self.assertEqual(actual["article"]["agent_markdown"], final)
+            receipt = json.loads((directory / "edition-receipt.json").read_bytes())
+            self.assertEqual(len(receipt["followup_transfer_probes"]), 2)
+            self.assertEqual(len(effective_feedback(receipt, [], packet(), actual)), 1)
+            self.assertEqual([item["label"] for item in backend.calls].count("story-transfer-probe"), 3)
 
     def test_source_snapshot_tampering_and_external_impersonation_fail(self):
         with tempfile.TemporaryDirectory() as temporary:
