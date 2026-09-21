@@ -293,7 +293,8 @@ def generate_edition(directory, draft, events, backend, article_validator, model
                           + "\n现在执行修复而非审阅：只返回 {\"patches\":[{\"op\":\"replace\",\"path\":\"/article/title\",\"value\":\"修复后的标题\"}]}。"
                           "只允许 article/insights/brief 下的 add/replace/remove/replace_text 数据补丁，不写外部文件。若初稿 schema 错误，必须修正为契约要求的既有版本；不得发明新版本或通过降级 schema 绕过校验。"
                           "局部文字纠正优先用原文锚定操作：{\"op\":\"replace_text\",\"path\":\"/article/chapters/0/markdown\",\"old\":\"该字段内唯一的连续原文\",\"value\":\"纠正后的文字\"}。old必须逐字匹配且仅出现一次；其余文字由程序原样保留，不重写相邻章节。数组从0开始；路径错、原文过期或歧义时整批拒绝，不自动跳到别的字段。"
-                          "路径必须对应 CURRENT_EDITION 的实际树：Agent 为 /article/agent_markdown，架构与结尾为 /insights/architecture 和 /insights/closing，开篇概览为 /brief；不是 /agent_markdown 或 /article/insights。"
+                          "路径必须对应 CURRENT_EDITION 的实际树：最终 Agent 渲染由 /article/agent_markdown 基础 Markdown 加上 /article/agent_detail 结构化内容组成。trajectory 的 tool_steps/purpose、finding 和 resume 等内容属于 agent_detail；在渲染的 Agent 中看到一句话，不代表它也在 agent_markdown 中。只修实际含有原文的字段，不要为结构化内容在基础 Markdown 中虚构重复补丁；仅当两个字段分别确有原文时才分别修复。架构与结尾为 /insights/architecture 和 /insights/closing，开篇概览为 /brief；不是 /agent_markdown 或 /article/insights。"
+                          "缺失 old 的诊断只给整批修改前原始候选中的有界精确位置与摘录；不是重定位授权或语义正确性证明。诊断可能截断，不应把未列出当作不存在；重新核对 CURRENT_EDITION 的真实路径和逐字原文后提交新补丁。"
                           "缺少字段（如 /article/agent_detail 或章节 refs）要用 add；replace/remove 只能作用于已存在字段。缺父对象时先 add 整个父对象，不能直接修改不存在的子路径。整批补丁失败时没有任何修改生效。"
                           "可以整体替换受影响的 markdown 字段、概览或架构，不整篇无关重写。检查所有实质问题及其在另一视图中的重复，保留正确内容、真人诉求和证据。"
                           "新增必要细节要查原始事件；修复建议不是事实。不得执行历史命令。")

@@ -1,7 +1,83 @@
 import copy
+import json
 import re
 
 from .prompts import SCHEMA
+
+
+class MissingAnchorError(ValueError):
+    pass
+
+
+def missing_anchor_diagnostic(spec, parts, old, allowed_roots):
+    limits = {"nodes": 512, "depth": 32, "string_characters": 20000, "matches": 4, "path_characters": 240, "excerpt_characters": 160}
+
+    def excerpt(value, start=0):
+        return {"text": value[start:start + limits["excerpt_characters"]], "start": start,
+                "characters": len(value), "truncated": start > 0 or len(value) > start + limits["excerpt_characters"]}
+
+    try:
+        target = spec
+        for part in parts:
+            if isinstance(target, list):
+                if not re.fullmatch(r"0|[1-9][0-9]*", part):
+                    raise ValueError("Invalid original array index")
+                target = target[int(part)]
+            else:
+                target = target[part]
+        target_view = excerpt(target) if isinstance(target, str) else {"state": "not_a_string_before_batch"}
+    except (KeyError, IndexError, TypeError, ValueError):
+        target_view = {"state": "missing_before_batch"}
+    diagnostic = {"basis": "original_before_batch", "target": target_view, "exact_matches": [],
+                  "search_complete": True, "matches_omitted": False, "nodes_visited": 0, "limits": limits}
+
+    def display_child(path, truncated, key):
+        if truncated:
+            return path, True
+        remaining = max(0, limits["path_characters"] - len(path) - 1)
+        raw = str(key)
+        escaped = raw[:remaining + 1].replace("~", "~0").replace("/", "~1")
+        child = path + "/" + escaped[:remaining]
+        return child[:limits["path_characters"]], len(path) + 1 > limits["path_characters"] or len(raw) > remaining or len(escaped) > remaining
+
+    def visit(value, path, depth, path_truncated=False):
+        if diagnostic["nodes_visited"] >= limits["nodes"]:
+            diagnostic["search_complete"] = False
+            return
+        diagnostic["nodes_visited"] += 1
+        if isinstance(value, str):
+            bounded = value[:limits["string_characters"]]
+            if len(bounded) < len(value):
+                diagnostic["search_complete"] = False
+            position = bounded.find(old)
+            if position >= 0:
+                if len(diagnostic["exact_matches"]) >= limits["matches"]:
+                    diagnostic["matches_omitted"] = True
+                else:
+                    diagnostic["exact_matches"].append({"path": path,
+                        "path_truncated": path_truncated, "anchor_start": position,
+                        "excerpt": excerpt(value, max(0, position - 40))})
+        elif isinstance(value, (dict, list)):
+            if depth >= limits["depth"]:
+                diagnostic["search_complete"] = False
+                return
+            children = value.items() if isinstance(value, dict) else enumerate(value)
+            for key, child in children:
+                if diagnostic["nodes_visited"] >= limits["nodes"]:
+                    diagnostic["search_complete"] = False
+                    return
+                child_path, truncated = display_child(path, path_truncated, key)
+                visit(child, child_path, depth + 1, truncated)
+
+    if isinstance(spec, dict):
+        for root, value in spec.items():
+            if root in allowed_roots:
+                if diagnostic["nodes_visited"] >= limits["nodes"]:
+                    diagnostic["search_complete"] = False
+                    break
+                root_path, truncated = display_child("", False, root)
+                visit(value, root_path, 0, truncated)
+    return json.dumps(diagnostic, ensure_ascii=False)
 
 
 def apply_spec_patches(spec, response):
@@ -14,7 +90,7 @@ def replace_anchored_text(current, patch):
         raise ValueError("replace_text needs an existing string target, nonempty literal old text and string value.")
     position = current.find(old)
     if position < 0:
-        raise ValueError("replace_text old text does not occur at this exact target; recheck the zero-based path and original text.")
+        raise MissingAnchorError("replace_text old text does not occur at this exact target; recheck the zero-based path and original text.")
     if current.find(old, position + 1) >= 0:
         raise ValueError("replace_text old text is ambiguous at this target; include more literal surrounding context.")
     return current[:position] + value + current[position + len(old):]
@@ -78,6 +154,11 @@ def apply_data_patches(spec, response, allowed_roots):
                     parent[key] = copy.deepcopy(patch["value"])
             else:
                 raise ValueError("Spec patch targets a scalar parent.")
+        except MissingAnchorError as error:
+            diagnostic = missing_anchor_diagnostic(spec, parts, patch["old"], allowed_roots)
+            raise ValueError(f"Patch {patch_number} ({operation} at {path!r}): {error} "
+                             "No changes applied. Navigation only, not relocation or semantic approval; inspect CURRENT_EDITION before submitting a new exact patch. "
+                             f"Anchor diagnostic: {diagnostic}") from error
         except (KeyError, IndexError, TypeError) as error:
             raise ValueError(f"Patch {patch_number} ({operation} at {path!r}): parent path does not exist; add the missing container before its children.") from error
         except ValueError as error:
