@@ -10,6 +10,7 @@ from session_spec.draft_recovery import create_recovery, recovery_snapshot
 from session_spec.fast_quality import QualityReviewFailure
 from session_spec.fast_story import DraftValidationError
 from session_spec.native_bridge import NativeBridge, PIPELINE
+from session_spec.reduction_semantic import PrivacyReviewFailure
 from session_spec.storage import file_hash, write_json
 
 
@@ -87,7 +88,7 @@ class DraftRecoveryTests(unittest.TestCase):
             create_recovery(self.root / "empty", "human", "draft_structure_invalid")
 
     def test_native_failure_delivers_only_a_local_unapproved_draft_and_no_publication_authority(self):
-        for cause in ("structure", "quality"):
+        for cause in ("structure", "quality", "privacy"):
             with self.subTest(cause=cause):
                 bridge = NativeBridge("11111111-1111-4111-8111-111111111111", self.root / cause)
                 source = bridge.capture([{"type": "session.start", "data": {"sessionId": bridge.session_id}},
@@ -97,6 +98,8 @@ class DraftRecoveryTests(unittest.TestCase):
                     support = review_directory.parent / "abstraction/story/_support"
                     support.mkdir(parents=True)
                     write_json(support / "fast-candidate-0.json", self.candidate)
+                    if cause == "privacy":
+                        raise PrivacyReviewFailure("PRIVATE_DIAGNOSTIC")
                     if cause == "quality":
                         write_json(support / "fast-quality.json", {"result": {"issues": [{"reason": "PRIVATE_DIAGNOSTIC: wrong speaker"}]}})
                         raise QualityReviewFailure("PRIVATE_DIAGNOSTIC")

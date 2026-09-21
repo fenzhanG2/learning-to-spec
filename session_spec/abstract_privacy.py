@@ -112,17 +112,23 @@ def prepare_abstract_review(source, home, review_directory, audience, selection,
     review["review_id"] = review_identity(review)
     write_json(review_directory / "review.json", review)
     if fast:
-        from .fast_quality import FastQualityBackend, review_full_content
+        from .fast_quality import DraftPrivacyBackend, FastQualityBackend, review_source_quality
+        from .reduction_semantic import PrivacyReviewFailure
 
         packet = json.loads((directory / "story/_support/input.json").read_bytes())
         quality_path = directory / "story/_support/fast-quality.json"
         reviewer = FastQualityBackend(backend, packet, artifact, directory / "story/_support/story-report.json", quality_path)
+        write_json(directory / "story/_support/source-review-started.json", {"schema": "isolated-source-review/v1"})
+        review_source_quality(reviewer, surface)
         if privacy_mode == "llm":
-            review = semantic_review(review_directory, consent=True, backend=reviewer, max_calls=3)
-        else:
-            review_full_content(reviewer, surface)
+            remaining = max(0, 3 - len(backend.calls))
+            if not remaining:
+                raise PrivacyReviewFailure("Draft repairs used the model-call budget before the isolated privacy review; no privacy approval was recorded")
+            review = semantic_review(review_directory, consent=True, backend=DraftPrivacyBackend(backend),
+                                     max_calls=remaining, repair_attempts=min(1, remaining - 1))
         check_preparation_deadline()
         manifest["quality_review_sha256"] = file_hash(quality_path)
+        manifest["review_isolation"] = "source-quality-and-draft-privacy/v1"
         write_json(directory / "abstraction.json", manifest)
         review["abstraction_sha256"] = file_hash(directory / "abstraction.json")
         review["review_id"] = review_identity(review)

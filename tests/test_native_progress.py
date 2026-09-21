@@ -184,6 +184,16 @@ class NativeProgressTests(unittest.TestCase):
             self.assertEqual(self.native_status(mode="full")["phase"], "checking")
             self.assertEqual(self.native_status(mode="llm")["phase"], "privacy")
 
+    def test_isolated_source_review_and_draft_privacy_are_distinct_progress_phases(self):
+        support = self.work.parent
+        (self.root / "abstraction/abstraction.json").write_text("PRIVATE_NOT_READ")
+        (support / "source-review-started.json").write_text("PRIVATE_NOT_READ")
+        with patch.object(Path, "open", side_effect=AssertionError("No private surface reads")):
+            self.assertEqual(self.native_status(mode="llm")["phase"], "checking")
+        (support / "fast-quality.json").write_bytes(b"done")
+        with patch.object(Path, "open", side_effect=AssertionError("No private surface reads")):
+            self.assertEqual(self.native_status(mode="llm")["phase"], "privacy")
+
     def test_fast_partial_or_unexpected_receipt_is_unknown(self):
         attempt = self.work.parent / "fast-attempt.json"
         for payload in ('{', '[]', '{"attempts":[{"index":true}]}', '{"attempts":[{"index":9}]}'):

@@ -1,6 +1,15 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { currentSessionModel } from '../extensions/learning-to-spec/model-selection.mjs';
+import { availableSessionModels, currentSessionModel } from '../extensions/learning-to-spec/model-selection.mjs';
+
+test('retry model list uses only selectable host entries, never pricing metadata or fixed models', async () => {
+  const model = { count: 0, async list() { this.count += 1; return { list: [{ id: 'synthetic-one' }, { id: 'synthetic-two' }, 'auto', { id: '--bad' }, { id: 'synthetic-one' }], modelPriceCategories: [{ id: 'not-selectable' }] }; } };
+  assert.deepEqual(await availableSessionModels({ rpc: { model } }), ['synthetic-one', 'synthetic-two', 'auto']);
+  assert.equal(model.count, 1);
+  assert.deepEqual(await availableSessionModels({}), []);
+  assert.deepEqual(await availableSessionModels({ rpc: { model: { list: () => new Promise(() => {}) } } }, { timeoutMs: 5 }), []);
+  assert.deepEqual(await availableSessionModels({ rpc: { model: { list() { throw new Error('PRIVATE'); } } } }), []);
+});
 
 test('host model getter preserves receiver and exact selection without switching', async () => {
   const model = { modelId: 'synthetic/model:v2', reads: 0,

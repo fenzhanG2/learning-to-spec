@@ -171,7 +171,7 @@ async function prepare() {
       if (file.name === 'deliverables.zip') cache.set(file.name, blob);
       button.disabled = false;
     }
-    status.textContent = recovery ? 'Unvalidated draft saved locally · privacy incomplete · no upload'
+    status.textContent = recovery ? 'Unvalidated draft saved locally · privacy incomplete · no upload by this panel · use /to-spec for retry or upload choices'
       : 'Ready · saved locally · no ArtifactStore upload by this panel';
   } finally { clearTimeout(timer); }
 }

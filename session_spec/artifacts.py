@@ -13,7 +13,7 @@ import zipfile
 from pathlib import Path
 
 from .reduction import digest
-from .share_package import package_bytes, package_preview
+from .share_package import UNVALIDATED_SCHEMA, package_bytes, package_preview
 from .storage import write_json
 
 
@@ -188,13 +188,16 @@ def publish_package(directory, plan, confirmation, client):
     manifest, archive = package_bytes(directory)
     receipt = {"schema": "artifact-publication/v1", "plan_id": plan["plan_id"], "site": plan["site"], "status": "starting",
                "package_id": manifest["package_id"], "url": BASE + "/sites/" + plan["site"] + "/"}
+    if manifest["schema"] == UNVALIDATED_SCHEMA:
+        receipt.update(quality="unvalidated", privacy="incomplete", risk_override=True,
+                       verification_scope="File transfer and audience only; content and privacy validation did not pass")
     write_json(directory / "publication.json", receipt)
     placeholder = io.BytesIO()
     with zipfile.ZipFile(placeholder, "w") as staging:
         if "index.html" in manifest["files"]:
-            staging.writestr("index.html", "<!doctype html><title>Pending privacy-checked publication</title><p>No session content has been uploaded.</p>")
+            staging.writestr("index.html", "<!doctype html><title>Pending publication</title><p>No session content has been uploaded.</p>")
         else:
-            staging.writestr("agent-spec.md", "# Pending privacy-checked publication\nNo session content has been uploaded.\n")
+            staging.writestr("agent-spec.md", "# Pending publication\nNo session content has been uploaded.\n")
     try:
         client.upload(plan["site"], placeholder.getvalue(), plan["team"])
         receipt["status"] = "placeholder_created"

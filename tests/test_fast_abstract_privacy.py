@@ -10,6 +10,7 @@ from offline_provider import guard_offline_test
 from session_spec.abstract_privacy import generate_abstract_private, load_abstract_review, prepare_abstract_review, validate_abstract_story
 from session_spec.backend import preparation_budget
 from session_spec.fast_quality import QualityReviewFailure
+from session_spec.reduction_semantic import PrivacyReviewFailure
 from test_fast_quality import quality
 from test_fast_story import draft
 from test_story_pipeline import FakeBackend
@@ -50,37 +51,45 @@ class FastAbstractPrivacyTests(unittest.TestCase):
             finding["id"]: {"action": "keep"} for finding in review["findings"]}}
         return generate_abstract_private(self.review_directory, decisions, self.output, self.root / "home", confirm_choices=True)
 
-    def test_two_calls_through_real_render_review_and_export_without_postapproval_model(self):
-        review = self.prepare([draft(), {"quality": quality(), "findings": [], "limitations": []}])
+    def test_three_isolated_calls_through_real_render_review_and_export_without_postapproval_model(self):
+        review = self.prepare([draft(), {"quality": quality()}, {"findings": [], "limitations": []}])
         self.assertIsNone(self.backend_settings["model"])
         self.assertIsNone(self.backend_settings["auto_tier"])
         self.assertIsNone(self.backend_settings["reasoning_effort"])
-        self.assertEqual(len(self.backend.calls), 2)
+        self.assertEqual(len(self.backend.calls), 3)
+        self.assertEqual([call["label"] for call in self.backend.calls], ["fast-story-draft", "bounded-source-quality", "privacy-context-1"])
+        self.assertIn("FULL_SOURCE_EVENTS", self.backend.prompts[1])
+        self.assertNotIn("SOURCE SLOTS", self.backend.prompts[1])
+        self.assertNotIn("FULL_SOURCE_EVENTS", self.backend.prompts[2])
+        self.assertNotIn("SOURCE_ATTENTION_CANDIDATES", self.backend.prompts[2])
+        self.assertIn("SOURCE SLOTS", self.backend.prompts[2])
         manifest = load_abstract_review(self.review_directory, validate_parent=True)
         self.assertEqual(manifest["quality_profile"], "bounded-source-review/v1")
         result = self.export(review)
-        self.assertEqual(len(self.backend.calls), 2)
+        self.assertEqual(len(self.backend.calls), 3)
         self.assertEqual(result["model_calls_after_approval"], 0)
         self.assertEqual(set(result["files"]), {"human-spec.html", "agent-spec.md", "evidence.md"})
         self.assertTrue(validate_abstract_story(self.output / "story")["valid"])
 
-    def test_one_structural_repair_makes_exactly_three_total_calls(self):
+    def test_structural_repair_exhaustion_offers_recovery_instead_of_a_fourth_model_call(self):
         invalid = copy.deepcopy(draft())
         invalid["article"]["chapters"][0]["markdown"] += " E000002"
         repair = {"replacements": [{"path": ["article", "chapters", 0, "markdown"], "value": draft()["article"]["chapters"][0]["markdown"]}]}
-        review = self.prepare([invalid, repair, {"quality": quality(), "findings": [], "limitations": []}])
-        self.assertEqual([call["label"] for call in self.backend.calls], ["fast-story-draft", "fast-story-repair", "bounded-quality-privacy"])
-        self.export(review)
+        with self.assertRaisesRegex(PrivacyReviewFailure, "model-call budget"):
+            self.prepare([invalid, repair, {"quality": quality()}])
+        self.assertEqual([call["label"] for call in self.backend.calls], ["fast-story-draft", "fast-story-repair", "bounded-source-quality"])
+        with self.assertRaises(ValueError):
+            load_abstract_review(self.review_directory, validate_parent=True)
         self.assertEqual(len(self.backend.calls), 3)
 
     def test_explicit_auto_preserves_user_choice_without_incompatible_effort_or_tier(self):
-        self.prepare([draft(), {"quality": quality(), "findings": [], "limitations": []}], model="auto")
+        self.prepare([draft(), {"quality": quality()}, {"findings": [], "limitations": []}], model="auto")
         self.assertEqual(self.backend_settings["model"], "auto")
         self.assertIsNone(self.backend_settings["reasoning_effort"])
         self.assertIsNone(self.backend_settings["auto_tier"])
 
     def test_explicit_named_model_is_not_replaced_or_given_assumed_reasoning_support(self):
-        self.prepare([draft(), {"quality": quality(), "findings": [], "limitations": []}], model="synthetic-chosen-model")
+        self.prepare([draft(), {"quality": quality()}, {"findings": [], "limitations": []}], model="synthetic-chosen-model")
         self.assertEqual(self.backend_settings["model"], "synthetic-chosen-model")
         self.assertIsNone(self.backend_settings["reasoning_effort"])
         self.assertIsNone(self.backend_settings["auto_tier"])
@@ -96,7 +105,7 @@ class FastAbstractPrivacyTests(unittest.TestCase):
 
     def test_full_mode_still_gets_source_quality_but_no_privacy_review(self):
         with patch("session_spec.abstract_privacy.semantic_review", side_effect=AssertionError("No privacy scanning in full mode")):
-            review = self.prepare([draft(), {"quality": quality(), "findings": [], "limitations": []}], "full")
+            review = self.prepare([draft(), {"quality": quality()}], "full")
         self.assertEqual(review["semantic"]["status"], "skipped_by_choice")
         self.assertEqual(len(self.backend.calls), 2)
         self.export(review)
@@ -105,10 +114,19 @@ class FastAbstractPrivacyTests(unittest.TestCase):
         result = quality()
         result.update(verdict="fail", issues=[{"reason": "The source requires retaining the original functionality.", "refs": ["E000001"], "quote": "保留功能"}])
         with self.assertRaises(QualityReviewFailure):
-            self.prepare([draft(), {"quality": result, "findings": [], "limitations": []}])
+            self.prepare([draft(), {"quality": result}])
         with self.assertRaises(ValueError):
             load_abstract_review(self.review_directory, validate_parent=True)
         self.assertFalse((self.output / "deliverables").exists())
+
+    def test_privacy_quote_failure_is_recoverable_without_a_fourth_call(self):
+        invalid = {"findings": [{"slot": "S1", "quote": "ABSENT_ORIGINAL_DETAIL", "category": "reputation", "necessity": "unnecessary", "reason": "Synthetic bad finding", "alternative": "", "related": []}]}
+        with self.assertRaises(PrivacyReviewFailure):
+            self.prepare([draft(), {"quality": quality()}, invalid])
+        self.assertEqual(len(self.backend.calls), 3)
+        self.assertNotIn("ABSENT_ORIGINAL_DETAIL", self.backend.prompts[2])
+        with self.assertRaises(ValueError):
+            load_abstract_review(self.review_directory, validate_parent=True)
 
 
 if __name__ == "__main__":

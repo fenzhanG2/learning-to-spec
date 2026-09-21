@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { currentSessionModel } from './model-selection.mjs';
+import { availableSessionModels, currentSessionModel } from './model-selection.mjs';
 
 const PIPELINE = 'abstract-then-redact/v1';
 const preparationPhases = Object.freeze({
@@ -378,7 +378,7 @@ export function createWorkflow({ getSession, getBridge, wait = milliseconds => n
         throw new PreparationFailure('publication_unconfirmed', 'Local files remain available. The remote publication outcome is unknown; an upload may have partially or fully completed. Do not retry blindly. Check the remote outcome before attempting another upload.');
       }
       if (value.status === 'error' && value.stage === 'scan' && value.draft_available === true
-          && ['draft_references_invalid', 'draft_structure_invalid', 'draft_quality_invalid'].includes(value.error_code)) return value;
+          && ['draft_references_invalid', 'draft_structure_invalid', 'draft_quality_invalid', 'draft_privacy_invalid'].includes(value.error_code)) return value;
       if (value.status === 'error' && value.stage === 'scan' && value.error_code === 'cleanup_unconfirmed') {
         throw new PreparationFailure('cleanup_unconfirmed', 'Preparation could not confirm worker cleanup. Do not start another export until cleanup has been checked. Any saved work is preserved; no automatic restart or upload was started.');
       }
@@ -432,41 +432,99 @@ export function createWorkflow({ getSession, getBridge, wait = milliseconds => n
     await session().log(`Learning to Spec · ${preparation}.`, { ephemeral: false });
     const hostModel = await checked(invocation, () => currentSessionModel(session()));
     const source = await capture(invocation, selection.privacyMode);
-    const scanned = await checked(invocation, () => bridge().call('scan', {
-      session: source.source, readers: selection.readers, delivery: selection.delivery, audience,
-      privacy_mode: selection.privacyMode, detection: smart ? 'copilot' : 'none', semantic: smart, pipeline: PIPELINE,
-      ...(hostModel ? { host_model: hostModel } : {}),
-    }));
-    preparingJob = scanned.job;
-    if (session().capabilities.ui?.canvases) {
-      openedInstance = randomUUID();
-      try {
-        await checked(invocation, () => session().rpc.canvas.open({ canvasId: 'learning-to-spec', instanceId: openedInstance }));
-        progressOpenedJob = scanned.job;
-      } catch {
-        checkpoint(invocation);
-        await session().log('The progress panel could not open. Your export is still running; wait here for its result rather than starting another export.', { ephemeral: false });
-      }
-    }
-    const prepared = await completed(scanned.job, invocation, preparation);
-    if (prepared.status === 'error' && prepared.draft_available === true) {
-      const draft = await checked(invocation, () => bridge().call('deliverables', { job: scanned.job }));
-      if (draft.kind !== 'unvalidated_draft' || typeof draft.folder !== 'string' || !draft.folder) throw new Error('The private draft location could not be verified. Saved diagnostics remain local.');
-      latestOutput = { job: scanned.job, delivery: 'local', publicationAttempted: true, recovery: true };
-      preparingJob = undefined;
-      await session().log('An unfinished draft is available in the output panel. Validation did not pass, so it is clearly marked unvalidated. Privacy review/redaction is incomplete; sensitive details may remain. Open it locally for reference, not as a verified spec. It cannot be uploaded by this workflow.');
-      await session().log('Private draft folder: ' + safeMarkdown(draft.folder));
-      if (session().capabilities.ui?.canvases && progressOpenedJob !== scanned.job) {
+    return prepareSnapshot(invocation, source, selection, audience, hostModel);
+  }
+  async function prepareSnapshot(invocation, source, selection, audience, hostModel, retryOf) {
+    const smart = selection.privacyMode === 'llm';
+    const preparation = 'Stage 1 of 3: private Copilot draft and separate fact/privacy checks';
+    for (;;) {
+      const scanned = await checked(invocation, () => bridge().call('scan', {
+        session: source.source, readers: selection.readers, delivery: selection.delivery, audience,
+        privacy_mode: selection.privacyMode, detection: smart ? 'copilot' : 'none', semantic: smart, pipeline: PIPELINE,
+        ...(retryOf ? { retry_of: retryOf, retry_model: hostModel } : hostModel ? { host_model: hostModel } : {}),
+      }));
+      preparingJob = scanned.job;
+      if (session().capabilities.ui?.canvases) {
         openedInstance = randomUUID();
-        await checked(invocation, () => session().rpc.canvas.open({ canvasId: 'learning-to-spec', instanceId: openedInstance }));
+        try {
+          await checked(invocation, () => session().rpc.canvas.open({ canvasId: 'learning-to-spec', instanceId: openedInstance }));
+          progressOpenedJob = scanned.job;
+        } catch {
+          checkpoint(invocation);
+          await session().log('The progress panel could not open. Your export is still running; wait here for its result rather than starting another export.', { ephemeral: false });
+        }
       }
-      return { status: 'draft_available', quality: 'unvalidated', privacy: 'incomplete', upload_allowed: false,
-        message: 'Open the local unfinished draft in the output panel. It may contain errors and sensitive content; do not present it as validated or safe to share.' };
+      const prepared = await completed(scanned.job, invocation, preparation);
+      if (prepared.status === 'error' && prepared.draft_available === true) {
+        const recovery = { job: scanned.job, source, selection, audience, hostModel, errorCode: prepared.error_code };
+        const decision = await recoverDraft(invocation, recovery);
+        if (!decision.retryModel) return decision;
+        retryOf = scanned.job;
+        hostModel = decision.retryModel;
+        continue;
+      }
+      const review = await checked(invocation, () => bridge().call('review', { job: scanned.job }));
+      if (review.original_source_sha256 !== source.sha256 || review.preferences?.readers !== selection.readers
+        || review.preferences?.destination !== selection.delivery || review.audience !== audience) throw new Error('Prepared draft does not match the captured source or export settings.');
+      return reviewAndGenerate(invocation, scanned, selection, review);
     }
-    const review = await checked(invocation, () => bridge().call('review', { job: scanned.job }));
-    if (review.original_source_sha256 !== source.sha256 || review.preferences?.readers !== selection.readers
-      || review.preferences?.destination !== selection.delivery || review.audience !== audience) throw new Error('Prepared draft does not match the captured source or export settings.');
-    return reviewAndGenerate(invocation, scanned, selection, review);
+  }
+  async function recoverDraft(invocation, recovery) {
+    const draft = await checked(invocation, () => bridge().call('deliverables', { job: recovery.job }));
+    if (draft.kind !== 'unvalidated_draft' || typeof draft.folder !== 'string' || !draft.folder
+        || !/^[a-f0-9]{64}$/.test(draft.snapshot_id)) throw new Error('The private draft location could not be verified. Saved diagnostics remain local.');
+    latestOutput = { job: recovery.job, delivery: 'local', publicationAttempted: false, recovery };
+    preparingJob = undefined;
+    await session().log('An unfinished draft is saved, not as a verified spec. Validation did not pass; privacy review/redaction is incomplete and sensitive details may remain. You can keep it locally, retry with a selected model, or explicitly upload it with these risks.');
+    await session().log('Private draft folder: ' + safeMarkdown(draft.folder));
+    if (session().capabilities.ui?.canvases && progressOpenedJob !== recovery.job) {
+      openedInstance = randomUUID();
+      await checked(invocation, () => session().rpc.canvas.open({ canvasId: 'learning-to-spec', instanceId: openedInstance }));
+    }
+    const causes = {
+      draft_references_invalid: 'The draft has missing or invalid citations after its bounded repair.',
+      draft_structure_invalid: 'The draft format is still invalid after its bounded repair.',
+      draft_quality_invalid: 'The source-quality check found a factual/material defect or could not return a valid assessment.',
+      draft_privacy_invalid: 'Privacy review could not finish within this attempt, or its quotes did not match the generated draft. The model-call limit was not exceeded.',
+    };
+    const answer = await form(invocation, `Your draft is saved.\n\n${causes[recovery.errorCode] || 'Draft validation did not pass.'}\n\nRetry reuses the SAME captured conversation and reader/privacy choices with a model you select. It uses additional quota and a new bounded attempt; it never reruns the original coding task.\n\nUpload anyway sends the selected UNVALIDATED draft to ArtifactStore. Facts/citations may be wrong. Privacy review/redaction is incomplete: credentials, personal details or embarrassing asides may remain. Choose the audience and confirm the exact upload before anything is sent.`, {
+      recovery_action: { type: 'string', title: 'What would you like to do?', enum: ['local', 'retry', 'upload'], enumNames: ['Keep local draft', 'Retry · choose model', 'Upload anyway · unvalidated draft'], default: 'local' },
+    });
+    const localResult = { status: 'draft_available', quality: 'unvalidated', privacy: 'incomplete', upload_allowed: false,
+      message: 'The draft is saved locally. Use /to-spec for recovery choices. It is not validated or privacy-approved.' };
+    if (!answer) return localResult;
+    if (Object.keys(answer).length !== 1 || !['local', 'retry', 'upload'].includes(answer.recovery_action)) throw new Error('Invalid draft recovery choice. No retry or upload started.');
+    if (answer.recovery_action === 'local') return localResult;
+    if (answer.recovery_action === 'retry') {
+      let models = await checked(invocation, () => availableSessionModels(session()));
+      if (!models.length) {
+        const current = await checked(invocation, () => currentSessionModel(session()));
+        if (current) models = [current];
+      }
+      if (!models.length) {
+        await session().log('Copilot did not expose a selectable model. The draft remains saved locally; change the Copilot model picker and run /to-spec again. No model was guessed and no retry started.');
+        return localResult;
+      }
+      models = [...models.filter(model => model !== recovery.hostModel), ...models.filter(model => model === recovery.hostModel)];
+      const selected = await form(invocation, 'Choose the model for this retry only. Available choices come from this Copilot session, not a fixed plugin list. The separate CLI worker still needs access to the model; rejection will not silently switch models. Your conversation model is not changed.', {
+        retry_model: { type: 'string', title: 'Retry model', enum: models, default: models[0] },
+      });
+      if (!selected) return localResult;
+      if (Object.keys(selected).length !== 1 || !models.includes(selected.retry_model)) throw new Error('Select a model offered by this Copilot session. No retry started.');
+      await session().log('Retry explicitly requested with ' + safeMarkdown(selected.retry_model) + '. Reusing the captured source; the failed draft and receipts remain saved.', { ephemeral: false });
+      return { retryModel: selected.retry_model };
+    }
+    let audience = recovery.audience;
+    if (audience === 'local') {
+      const target = await checked(invocation, () => session().ui.select('ArtifactStore audience for the unvalidated draft', ['Just me · root', 'A team · inherited access']));
+      if (!target) return localResult;
+      if (!['Just me · root', 'A team · inherited access'].includes(target)) throw new Error('Invalid audience choice.');
+      audience = target === 'Just me · root' ? 'root' : `team:${await checked(invocation, () => session().ui.input('Team slug')) || ''}`;
+      if (audience === 'team:') return localResult;
+    }
+    const publication = await publish(recovery.job, invocation, { snapshotId: draft.snapshot_id, audience });
+    return { status: publication.status === 'verified' ? 'draft_uploaded' : 'draft_available', quality: 'unvalidated', privacy: 'incomplete',
+      publication, message: 'Unvalidated draft retained. Any verified upload confirms only file transfer and audience, not content correctness or privacy.' };
   }
   async function reviewAndGenerate(invocation, scanned, selection, review) {
     const smart = selection.privacyMode === 'llm';
@@ -588,10 +646,15 @@ export function createWorkflow({ getSession, getBridge, wait = milliseconds => n
       readers: saved.readers, delivery: saved.delivery, privacyMode: saved.privacy_mode,
     }, review);
   }
-  async function publish(job, invocation) {
+  async function publish(job, invocation, recovery) {
     let dispatched = false;
     try {
-      const manifest = await checked(invocation, () => bridge().call('package', { job, evidence: true }));
+      const manifest = await checked(invocation, () => recovery
+        ? bridge().call('recovery-package', { job, snapshot_id: recovery.snapshotId, audience: recovery.audience, delivery: 'artifactstore', accept_unvalidated: true })
+        : bridge().call('package', { job, evidence: true }));
+      if (recovery && (manifest.schema !== 'unvalidated-share-package/v1' || manifest.recovery_id !== recovery.snapshotId
+          || manifest.audience !== recovery.audience || manifest.quality !== 'unvalidated' || manifest.privacy !== 'incomplete')) throw new Error('Recovery package does not match the accepted draft and audience.');
+      if (!recovery && manifest.schema === 'unvalidated-share-package/v1') throw new Error('Unvalidated drafts require the explicit recovery workflow.');
       let plan;
       let notice = '';
       let proposedName = defaultArtifactName();
@@ -618,23 +681,26 @@ export function createWorkflow({ getSession, getBridge, wait = milliseconds => n
       }
       if (!plan) throw new PreparationFailure('artifact_name_invalid', 'Your specs are saved. The upload name was not accepted; no upload was started. Open the saved files or try a valid unique name without regenerating.');
       const residual = manifest.findings.map(finding => `${safeMarkdown(finding.file)} · ${safeMarkdown(finding.category)}: ${safeMarkdown(finding.text)}`).join('\n\n');
-      const message = `Upload the saved spec?\n\nName: ${safeMarkdown(plan.site)}\nAudience: ${plan.team ? `Team ${safeMarkdown(plan.team)} · inherited access` : 'Just me · root (plus service administrators)'}\nFiles: ${Object.keys(manifest.files).map(safeMarkdown).join(', ')}\n\n${residual ? `These flagged details remain in the final files. Upload keeps them:\n\n${residual}\n\n` : ''}Accept explicitly uploads these exact files to this audience. Cancel keeps your local files. No more model calls.`;
-      const properties = { upload_action: { type: 'string', title: 'Ready to upload?', enum: ['upload', 'cancel'], enumNames: ['Upload this spec', 'Keep local files only'], default: 'upload' } };
+      const warning = recovery ? 'UNVALIDATED DRAFT — facts/citations may be wrong. Privacy review/redaction did NOT complete. These files may contain credentials, personal details or embarrassing asides. Uploading will not fix or validate them.\n\n' : '';
+      const message = `${warning}Upload the saved ${recovery ? 'draft' : 'spec'}?\n\nName: ${safeMarkdown(plan.site)}\nAudience: ${plan.team ? `Team ${safeMarkdown(plan.team)} · inherited access` : 'Just me · root (plus service administrators)'}\nFiles: ${Object.keys(manifest.files).map(safeMarkdown).join(', ')}\n\n${residual ? `These flagged details remain in the final files. Upload keeps them:\n\n${residual}\n\n` : ''}Accept explicitly uploads these exact files to this audience. Cancel keeps your local files. No more model calls.`;
+      const uploadAction = recovery ? 'upload_unvalidated' : 'upload';
+      const properties = { upload_action: { type: 'string', title: 'Ready to upload?', enum: [uploadAction, 'cancel'], enumNames: [recovery ? 'Upload anyway · accept incomplete privacy and validation' : 'Upload this spec', 'Keep local files only'], default: recovery ? 'cancel' : 'upload' } };
       if (reviewFormBytes({ message, properties }) > reviewFormByteLimit) throw new PreparationFailure('artifact_review_too_large', 'Your specs are saved. Too many residual disclosures remain for a safe upload confirmation. Review the local files and privacy choices; no upload was started.');
       const approved = await form(invocation, message, properties);
       if (!approved || approved.upload_action === 'cancel') return { status: 'cancelled', local_files_available: true };
-      if (Object.keys(approved).length !== 1 || approved.upload_action !== 'upload') throw new Error('Invalid upload choice');
+      if (Object.keys(approved).length !== 1 || approved.upload_action !== uploadAction) throw new Error('Invalid upload choice');
       dispatched = true;
       if (latestOutput?.job === job) latestOutput.publicationAttempted = true;
-      await checked(invocation, () => bridge().call('publish', { job, confirm: plan.plan_id, package_id: manifest.package_id, acknowledged: manifest.findings.map(finding => finding.id), publish_intent: true }));
+      await checked(invocation, () => bridge().call('publish', { job, confirm: plan.plan_id, package_id: manifest.package_id, acknowledged: manifest.findings.map(finding => finding.id), publish_intent: true, ...(recovery ? { accept_unvalidated: true } : {}) }));
       const result = await completed(job, invocation, 'Upload', true);
       const publication = result.publication;
       if (publication?.status !== 'verified' || publication.plan_id !== plan.plan_id || publication.package_id !== manifest.package_id
+        || (recovery && (publication.quality !== 'unvalidated' || publication.privacy !== 'incomplete' || publication.risk_override !== true))
         || publication.site !== plan.site || publication.url !== `https://artifacts.turing.azure.com/sites/${plan.site}/`) {
         throw new PreparationFailure('publication_unconfirmed', 'Local files remain available. The upload did not return a matching verified receipt. Check the remote outcome before any retry.');
       }
-      await session().log(`ArtifactStore upload verified. ${publication.url}`);
-      return { status: publication.status, url: publication.url };
+      await session().log(`${recovery ? 'Unvalidated draft uploaded by your choice. File transfer and audience verified; content/privacy remain unvalidated.' : 'ArtifactStore upload verified.'} ${publication.url}`);
+      return { status: publication.status, url: publication.url, ...(recovery ? { quality: 'unvalidated', privacy: 'incomplete' } : {}) };
     } catch (error) {
       if (error instanceof PreparationFailure) throw error;
       if (dispatched) throw new PreparationFailure('publication_unconfirmed', 'Your specs are saved. The upload outcome is unknown; inspect this exact artifact before any retry. No automatic upload retry occurred.');
@@ -649,7 +715,7 @@ export function createWorkflow({ getSession, getBridge, wait = milliseconds => n
     active = (async () => {
       const existing = latestOutput;
       if (existing) {
-        const options = ['Open saved files', ...(latestOutput.delivery === 'artifactstore' && !latestOutput.publicationAttempted ? ['Upload saved files'] : []), 'Create a new snapshot'];
+        const options = ['Open saved files', ...(existing.recovery && !existing.publicationAttempted ? ['Retry or upload draft'] : []), ...(latestOutput.delivery === 'artifactstore' && !latestOutput.publicationAttempted ? ['Upload saved files'] : []), 'Create a new snapshot'];
         const choice = await checked(invocation, () => session().ui.select(existing.recovery ? 'An unvalidated private draft is saved for this conversation.' : 'An export is already ready for this conversation.', options));
         if (!choice) return { cancelled: true };
         if (choice === 'Open saved files') {
@@ -657,6 +723,12 @@ export function createWorkflow({ getSession, getBridge, wait = milliseconds => n
           return { status: 'opened_saved_files', job: latestOutput.job };
         }
         if (choice === 'Upload saved files' && options.includes(choice)) return { status: 'done', publication: await publish(latestOutput.job, invocation) };
+        if (choice === 'Retry or upload draft' && options.includes(choice)) {
+          const recovery = existing.recovery;
+          const decision = await recoverDraft(invocation, recovery);
+          if (!decision.retryModel) return decision;
+          return prepareSnapshot(invocation, recovery.source, recovery.selection, recovery.audience, decision.retryModel, recovery.job);
+        }
         if (choice !== 'Create a new snapshot') throw new Error('Invalid export choice.');
         return nativeExport(invocation);
       }

@@ -24,7 +24,8 @@ from .backend import PreparationBudget, PreparationCallLimitError, PreparationTi
 from .delivery import preferences
 from .fast_story import DraftValidationError
 from .fast_quality import QualityReviewFailure
-from .draft_recovery import CAUSES as RECOVERY_CODES, create_recovery, recovery_snapshot
+from .draft_recovery import CAUSES as RECOVERY_CODES, create_recovery, prepare_recovery_package, recovery_snapshot
+from .reduction_semantic import PrivacyReviewFailure
 from .ingest import origin_of
 from .privacy_presentation import present_review
 from .privacy import HIDDEN_FIELDS, SECRET_FIELD, content_redaction, redaction_enabled, sanitize
@@ -232,6 +233,8 @@ def native_preparation_phase(directory, privacy_mode):
     try:
         fast_support = "abstraction/story/_support"
         fast_attempt = phase_checkpoint(directory, fast_support + "/fast-attempt.json")
+        if phase_checkpoint(directory, fast_support + "/source-review-started.json") and not phase_checkpoint(directory, fast_support + "/fast-quality.json"):
+            return "checking"
         if phase_checkpoint(directory, "abstraction/abstraction.json"):
             return "privacy" if privacy_mode == "llm" else ("checking" if fast_attempt else None)
         if fast_attempt is not None:
@@ -294,6 +297,24 @@ class NativeStudio(DurableStudio):
         super().__init__(*arguments, **settings)
 
     def _action(self, path, data):
+        if path == "/api/recovery-package":
+            from .share_package import load_package
+
+            job = self.job(data.get("job"))
+            if (not job.get("recovery_id") or data.get("snapshot_id") != job["recovery_id"]
+                    or data.get("accept_unvalidated") is not True or data.get("delivery") != "artifactstore"
+                    or job.get("status") == "running" or "generation" in job):
+                raise ValueError("A recovered draft, matching snapshot and explicit upload-risk choice are required")
+            recovery_snapshot(job["directory"], job["recovery_id"])
+            if "package" in job:
+                manifest = load_package(job["package"])
+                if manifest.get("audience") != data.get("audience") or manifest.get("recovery_id") != job["recovery_id"]:
+                    raise ValueError("Recovered package audience or snapshot changed")
+                return manifest
+            directory = job["directory"] / ("package-" + uuid.uuid4().hex)
+            manifest = prepare_recovery_package(job["directory"], job["recovery_id"], directory, data.get("audience"), True)
+            job["package"] = directory
+            return manifest
         if path != "/api/scan":
             return super()._action(path, data)
         if data.get("pipeline") != PIPELINE:
@@ -304,6 +325,16 @@ class NativeStudio(DurableStudio):
         settings = dict(self.settings)
         if not settings.get("model") and host_model is not None:
             settings["model"] = host_model
+        retry_request = {key: data.get(key) for key in ("session", "readers", "delivery", "audience", "privacy_mode", "detection", "semantic", "pipeline")}
+        retry_model = data.get("retry_model")
+        if data.get("retry_of") is not None or retry_model is not None:
+            previous = self.job(data.get("retry_of"))
+            if (previous.get("status") != "error" or previous.get("stage") != "scan"
+                    or previous.get("error_code") not in RECOVERY_CODES or not previous.get("recovery_id")
+                    or previous.get("preparation_request") != retry_request
+                    or not isinstance(retry_model, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:/-]{0,159}", retry_model)):
+                raise ValueError("A retry requires the failed snapshot, unchanged choices and an explicit model")
+            settings["model"] = retry_model
         selection = preferences(data.get("readers"), data.get("delivery"), data.get("audience"))
         mode = data.get("privacy_mode")
         if mode == "full":
@@ -316,9 +347,11 @@ class NativeStudio(DurableStudio):
             raise ValueError("Select this conversation's explicit snapshot")
         identifier = uuid.uuid4().hex
         job = {"id": identifier, "status": "new", "stage": "scan", "directory": self.output / identifier,
-               "pipeline": PIPELINE, "privacy_mode": mode}
+               "pipeline": PIPELINE, "privacy_mode": mode, "preparation_request": retry_request}
         job["model_selection"] = {"requested": settings.get("model") or "copilot-default",
-                                  "source": "configured" if self.settings.get("model") else "host" if host_model else "cli-default"}
+                                  "source": "user-retry" if retry_model else "configured" if self.settings.get("model") else "host" if host_model else "cli-default"}
+        if retry_model:
+            job["retry_of"] = previous["id"]
         job["directory"].mkdir()
         self.jobs[identifier] = job
 
@@ -328,9 +361,10 @@ class NativeStudio(DurableStudio):
                     review = prepare_abstract_review(source["path"], self.home, job["directory"] / "review", data["audience"],
                                                      selection, mode, custom=data.get("custom", []), fast=True, **settings)
                     budget.check()
-                except (DraftValidationError, QualityReviewFailure) as error:
+                except (DraftValidationError, QualityReviewFailure, PrivacyReviewFailure) as error:
                     try:
                         job["recovery_id"] = create_recovery(job["directory"], selection["readers"], error.error_code)
+                        job["recovery_cause"] = error.error_code
                     except (OSError, ValueError, TypeError, AttributeError, RecursionError) as recovery_error:
                         job["recovery_error"] = type(recovery_error).__name__
                     raise
@@ -376,7 +410,7 @@ class NativeStudio(DurableStudio):
                                 with self.lock:
                                     job["automated_elapsed_seconds"] = spent + time.monotonic() - budget.started
                 return operation()
-            except (PreparationTimeoutError, PreparationCallLimitError, DraftValidationError, QualityReviewFailure) as error:
+            except (PreparationTimeoutError, PreparationCallLimitError, DraftValidationError, QualityReviewFailure, PrivacyReviewFailure) as error:
                 with self.lock:
                     job["error_code"] = error.error_code
                 raise
@@ -434,7 +468,7 @@ class NativeStudio(DurableStudio):
     def output_delivery(self, identifier, expected=None, name=None, local_paths=False):
         with self.action_lock, self.lock:
             job = self.job(identifier)
-            recovery = job["status"] == "error" and job["stage"] == "scan" and job.get("error_code") in RECOVERY_CODES and bool(job.get("recovery_id"))
+            recovery = bool(job.get("recovery_id")) and "generation" not in job
             if getattr(self, "closing", False) or (not recovery and (job["status"] != "done" or job["stage"] not in {"generate", "publish", "verify"})):
                 raise ValueError("Only completed selected outputs can be previewed")
             generation, snapshot = recovery_snapshot(job["directory"], job["recovery_id"]) if recovery else self.delivery_snapshot(job)
@@ -836,9 +870,10 @@ class NativeBridge:
                 raise ValueError("Wait for completed privacy review")
             return self.bound_review(job)
         if operation == "deliverables":
-            if job["status"] == "error" and job.get("recovery_id") and job.get("error_code") in RECOVERY_CODES:
+            if job.get("recovery_id") and "generation" not in job:
                 manifest = self.studio.output_delivery(identifier, local_paths=True)
                 return {"job": identifier, "kind": "unvalidated_draft", "folder": manifest["local"]["folder"],
+                        "snapshot_id": manifest["snapshot_id"], "failure_code": job.get("recovery_cause", job.get("error_code")),
                         "files": [{**item, "path": manifest["local"]["files"][item["name"]]} for item in manifest["files"]]}
             return self.studio.delivered(identifier)
         if operation == "generate":
@@ -851,7 +886,7 @@ class NativeBridge:
                 raise ValueError("Native export requires an explicit privacy mode")
             if review["privacy_mode"] == "llm" and review.get("semantic", {}).get("status") != "reviewed":
                 raise ValueError("Smart redaction requires completed Copilot review; local rules alone are not sufficient")
-        if operation in {"generate", "package", "plan", "publish", "verify"}:
+        if operation in {"generate", "package", "recovery-package", "plan", "publish", "verify"}:
             return self.studio.action("/api/" + operation, copy.deepcopy(data))
         raise ValueError("Unsupported native operation")
 
@@ -873,7 +908,7 @@ def native_error(bridge, operation, error):
         directory = bridge.root / "diagnostics"
         directory.mkdir(exist_ok=True, mode=0o700)
         write_json(directory / (uuid.uuid4().hex + ".json"), {"operation": operation if isinstance(operation, str) and operation in {
-            "capture", "pending_review", "scan", "status", "review", "generate", "deliverables", "output_canvas", "progress_canvas", "package", "plan", "publish", "verify"
+            "capture", "pending_review", "scan", "status", "review", "generate", "deliverables", "output_canvas", "progress_canvas", "package", "recovery-package", "plan", "publish", "verify"
         } else "unknown", "code": code, "error_type": type(error).__name__, "message": str(error)})
     except OSError:
         pass

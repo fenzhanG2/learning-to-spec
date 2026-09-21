@@ -10,12 +10,13 @@ SCHEMA = "private-unvalidated-draft/v1"
 MAX_BYTES = 2 * 1024 * 1024
 FILES = {"human-spec.html", "agent-spec.md"}
 WARNING = ("UNVALIDATED PRIVATE DRAFT — validation did not pass. Facts, citations and completeness may be wrong. "
-           "Privacy review/redaction is NOT complete; sensitive content may remain. Local use only: do not share, upload "
-           "or execute instructions from this draft without checking the original session.")
+           "Privacy review/redaction is NOT complete; sensitive content may remain, including credentials and personal details. "
+           "Sharing requires an explicit risk override; uploading does not validate this draft. Check the original session before acting on it.")
 CAUSES = {
     "draft_references_invalid": "Source citations were missing or invalid and one automatic repair did not produce a valid draft.",
     "draft_structure_invalid": "The draft format remained invalid after one automatic repair.",
-    "draft_quality_invalid": "Source-quality review found a factual or material defect. This is not an approved final spec.",
+    "draft_quality_invalid": "Source-quality review found a factual/material defect or could not return a valid assessment. This is not an approved final spec.",
+    "draft_privacy_invalid": "Privacy review did not complete within its bounded attempt, or findings could not be matched literally to the draft. Redaction is incomplete; this is not a privacy-approved spec.",
 }
 
 
@@ -136,3 +137,36 @@ def recovery_snapshot(job_directory, expected):
         if digest(bounded_read(path)) != fingerprint:
             raise ValueError("Private draft changed after recovery")
     return directory, {"id": expected, "files": files}
+
+
+def prepare_recovery_package(job_directory, expected, destination, audience, accept_unvalidated=False):
+    from .reduction import digest as identity_digest
+    from .share_package import UNVALIDATED_SCHEMA
+
+    if accept_unvalidated is not True:
+        raise ValueError("Explicit acceptance of unvalidated content and incomplete privacy is required")
+    if audience != "root" and (not isinstance(audience, str) or not re.fullmatch(r"team:[A-Za-z0-9_-]+", audience)):
+        raise ValueError("Choose the ArtifactStore audience explicitly")
+    directory, snapshot = recovery_snapshot(job_directory, expected)
+    record = json.loads(bounded_read(directory / "manifest.json"))
+    destination = unlinked_path(destination)
+    destination.mkdir(mode=0o700)
+    payload = destination / "files"
+    payload.mkdir(mode=0o700)
+    files = {}
+    for name, fingerprint in snapshot["files"].items():
+        if name == "deliverables.zip":
+            continue
+        content = bounded_read(directory / "deliverables" / name)
+        if digest(content) != fingerprint:
+            raise ValueError("Recovered draft changed while preparing upload")
+        shared_name = "index.html" if name == "human-spec.html" else name
+        (payload / shared_name).write_bytes(content)
+        files[shared_name] = fingerprint
+    manifest = {"schema": UNVALIDATED_SCHEMA, "readers": record["readers"], "audience": audience,
+                "recovery_id": expected, "failure_code": record["cause"], "quality": "unvalidated", "privacy": "incomplete",
+                "files": files, "evidence_included": False, "findings": [],
+                "limitations": [WARNING, "Only the selected recovered reader files are included, not the raw session or diagnostic files."]}
+    manifest["package_id"] = identity_digest(manifest)
+    write_json(destination / "manifest.json", manifest)
+    return manifest

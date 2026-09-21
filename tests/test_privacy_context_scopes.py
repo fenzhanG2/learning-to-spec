@@ -16,6 +16,31 @@ import test_reduction as reduction_fixtures
 
 
 class PrivacyContextScopeTests(unittest.TestCase):
+    def test_wrong_slot_is_diagnosed_but_never_automatically_rebound(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            self.fixture(root, ["Only technical prose", "fixture-affiliation"])
+            before = (root / "review/review.json").read_bytes()
+            wrong = {"findings": [self.proposal("S1", "unnecessary", "Synthetic private detail")]}
+            backend = Backend([wrong, wrong])
+            with self.assertRaises(semantic_helpers.PrivacyReviewFailure):
+                semantic_review(root / "review", consent=True, backend=backend)
+            self.assertEqual(len(backend.calls), 2)
+            self.assertIn("Exact matches exist only in these supplied privacy slots: S2", backend.prompts[1])
+            self.assertEqual((root / "review/review.json").read_bytes(), before)
+
+    def test_original_only_disclosure_is_not_a_redaction_target_and_repair_can_drop_it(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            self.fixture(root, ["Only technical prose"])
+            invalid = {"findings": [self.proposal("S1", "unnecessary", "Absent original-session detail")]}
+            backend = Backend([invalid, {"findings": []}])
+            reviewed = semantic_review(root / "review", consent=True, backend=backend)
+            self.assertIn("No supplied privacy slot contains this quote", backend.prompts[1])
+            self.assertIn("Do not reconstruct an absent disclosure", backend.prompts[1])
+            self.assertEqual(reviewed["semantic"]["status"], "reviewed")
+            self.assertEqual(reviewed["findings"], [])
+
     def setUp(self):
         guard = patch("session_spec.reduction_semantic.CopilotBackend", side_effect=AssertionError("Synthetic tests cannot construct a model backend"))
         guard.start()

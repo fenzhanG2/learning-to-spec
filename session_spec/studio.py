@@ -259,7 +259,8 @@ class Studio:
             if data.get("confirm") != job["plan"].get("plan_id"):
                 raise ValueError("Destination changed; inspect the current destination before uploading")
             if data.get("publish_intent") is True:
-                approve_package(job["package"], data.get("package_id"), data.get("acknowledged", []), confirmed_publish=True)
+                approve_package(job["package"], data.get("package_id"), data.get("acknowledged", []), confirmed_publish=True,
+                                accept_unvalidated=data.get("accept_unvalidated") is True)
             return self.background(job, "publish", lambda: publish_package(job["package"], job["plan"], data.get("confirm"), ArtifactClient()))
         raise ValueError("Unknown studio action")
 

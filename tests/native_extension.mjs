@@ -512,14 +512,15 @@ test('tool invocation returns safe bounded failure details instead of an opaque 
   }
 });
 
-test('unvalidated draft is returned locally without review approval, regeneration or upload, including CLI hosts', async () => {
+test('all recovered failures offer an explicit decision and default to local files, including CLI hosts', async () => {
+  for (const code of ['draft_quality_invalid', 'draft_privacy_invalid', 'draft_structure_invalid', 'draft_references_invalid']) {
   for (const canvas of [true, false]) {
-    const context = fixture({ canvas, answers: [{ action: 'accept', content: { readers: 'both', delivery: 'artifactstore', privacyMode: 'llm' } }, 'Just me · root'] });
+    const context = fixture({ canvas, answers: [{ action: 'accept', content: { readers: 'both', delivery: 'artifactstore', privacyMode: 'llm' } }, { action: 'accept', content: { recovery_action: 'local' } }] });
     context.session.ui.select = async () => 'Just me · root';
     const original = context.bridge.call;
     context.bridge.call = async (operation, data) => {
-      if (operation === 'status') return { status: 'error', stage: 'scan', error_code: 'draft_quality_invalid', draft_available: true, error: 'PRIVATE_SOURCE' };
-      if (operation === 'deliverables') return { kind: 'unvalidated_draft', folder: 'C:/Synthetic/draft', files: [] };
+      if (operation === 'status') return { status: 'error', stage: 'scan', error_code: code, draft_available: true, error: 'PRIVATE_SOURCE' };
+      if (operation === 'deliverables') return { kind: 'unvalidated_draft', snapshot_id: 'd'.repeat(64), folder: 'C:/Synthetic/draft', files: [] };
       return original(operation, data);
     };
     const response = await context.workflow.tool.handler({}, { sessionId });
@@ -536,7 +537,74 @@ test('unvalidated draft is returned locally without review approval, regeneratio
     let options;
     context.session.ui.select = async (title, choices) => { options = choices; return 'Open saved files'; };
     await context.workflow.run({ sessionId });
-    assert.deepEqual(options, ['Open saved files', 'Create a new snapshot']);
+    assert.deepEqual(options, ['Open saved files', 'Retry or upload draft', 'Create a new snapshot']);
+    const decision = context.dialogs.find(dialog => dialog?.requestedSchema?.properties.recovery_action);
+    assert.equal(decision.requestedSchema.properties.recovery_action.default, 'local');
+    assert.match(decision.message, /credentials, personal details or embarrassing asides/);
+  }
+  }
+});
+
+function recoveryFixture(answers) {
+  const context = fixture({ answers: [{ action: 'accept', content: { readers: 'both', delivery: 'local', privacyMode: 'llm' } }, ...answers] });
+  const original = context.bridge.call;
+  let scanned = 0;
+  let published = false;
+  let plan;
+  context.session.ui.select = async () => 'Just me · root';
+  context.session.rpc.model = { getCurrent: async () => ({ modelId: 'synthetic-first' }), list: async () => ({ list: [{ id: 'synthetic-first' }, { id: 'synthetic-second' }] }) };
+  context.bridge.call = async (operation, data) => {
+    if (operation === 'scan') { scanned += 1; return original(operation, data); }
+    if (['status', 'deliverables', 'recovery-package', 'plan', 'publish'].includes(operation)) context.calls.push([operation, data]);
+    if (operation === 'status' && published) return { status: 'done', publication: { ...plan, status: 'verified', quality: 'unvalidated', privacy: 'incomplete', risk_override: true, url: `https://artifacts.turing.azure.com/sites/${plan.site}/` } };
+    if (operation === 'status' && scanned === 1) return { status: 'error', stage: 'scan', error_code: 'draft_privacy_invalid', draft_available: true };
+    if (operation === 'deliverables' && scanned === 1) return { kind: 'unvalidated_draft', folder: 'C:/Synthetic/draft', snapshot_id: 'd'.repeat(64), files: [] };
+    if (operation === 'recovery-package') return { schema: 'unvalidated-share-package/v1', recovery_id: data.snapshot_id, audience: data.audience, quality: 'unvalidated', privacy: 'incomplete', package_id: 'test-package', findings: [], files: { 'index.html': 'hash', 'agent-spec.md': 'hash' } };
+    if (operation === 'plan') { plan = { plan_id: 'test-plan', package_id: 'test-package', audience: 'root', team: null, site: data.site }; return plan; }
+    if (operation === 'publish') { published = true; return { job: data.job }; }
+    return original(operation, data);
+  };
+  return context;
+}
+
+test('explicit retry uses another selectable model and the same captured source without silently changing host settings', async () => {
+  const context = recoveryFixture([{ action: 'accept', content: { recovery_action: 'retry' } }, { action: 'accept', content: { retry_model: 'synthetic-second' } }, true]);
+  const result = await context.workflow.run({ sessionId });
+  assert.equal(result.status, 'done');
+  assert.equal(context.calls.filter(call => call[0] === 'capture').length, 1);
+  const scans = context.calls.filter(call => call[0] === 'scan').map(call => call[1]);
+  assert.equal(scans.length, 2);
+  assert.equal(scans[1].retry_model, 'synthetic-second');
+  assert.equal(scans[1].retry_of, 'a'.repeat(32));
+  assert.equal(scans[1].session, scans[0].session);
+  assert.equal(scans[1].privacy_mode, scans[0].privacy_mode);
+  assert.equal(context.calls.some(call => ['publish', 'plan', 'recovery-package'].includes(call[0])), false);
+});
+
+test('uploading a failed draft requires a separate risk acceptance and returns transfer-only success', async () => {
+  const context = recoveryFixture([{ action: 'accept', content: { recovery_action: 'upload' } }, { action: 'accept', content: { site: 'synthetic-draft' } }, { action: 'accept', content: { upload_action: 'upload_unvalidated' } }]);
+  const result = await context.workflow.run({ sessionId });
+  assert.equal(result.quality, 'unvalidated');
+  assert.equal(result.publication.status, 'verified');
+  assert.equal(result.publication.privacy, 'incomplete');
+  const approval = context.calls.find(call => call[0] === 'publish')[1];
+  assert.equal(approval.accept_unvalidated, true);
+  assert.equal(approval.confirm, 'test-plan');
+  assert.equal(context.calls.filter(call => call[0] === 'scan').length, 1);
+  assert.equal(context.calls.some(call => ['generate', 'review', 'package'].includes(call[0])), false);
+  const finalForm = context.dialogs.find(dialog => dialog?.requestedSchema?.properties.upload_action);
+  assert.equal(finalForm.requestedSchema.properties.upload_action.default, 'cancel');
+  assert.match(finalForm.message, /UNVALIDATED DRAFT/);
+  assert.match(context.logs.join('\n'), /content\/privacy remain unvalidated/);
+});
+
+test('cancelling recovery or final risk confirmation never uploads or adds model calls', async () => {
+  for (const answers of [[{ action: 'cancel' }], [{ action: 'accept', content: { recovery_action: 'upload' } }, { action: 'accept', content: { site: 'synthetic-draft' } }, { action: 'accept', content: { upload_action: 'cancel' } }]]) {
+    const context = recoveryFixture(answers);
+    const result = await context.workflow.run({ sessionId });
+    assert.equal(result.status, 'draft_available');
+    assert.equal(context.calls.filter(call => call[0] === 'scan').length, 1);
+    assert.equal(context.calls.some(call => call[0] === 'publish'), false);
   }
 });
 
