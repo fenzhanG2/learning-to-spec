@@ -21,7 +21,7 @@ from .agent_handoff import render_agent, tool_ledger, validate_agent_detail
 from .agent_package import EVIDENCE_RENDERER, HUMAN_PRESENTATION, LEGACY_PRESENTATION, PRESENTATION, render_agent_package, write_agent_package
 from .language import resolve_language, validate_language
 from .story_revision import load_revision
-from .transfer_probe import effective_feedback
+from .transfer_probe import FINAL_POLICY, effective_feedback, review_rules, validate_resolutions
 from .minimization_review import LEGACY_SCHEMA as LEGACY_MINIMIZATION_SCHEMA, SCHEMA as MINIMIZATION_SCHEMA, minimization_focus, validate_minimization
 from .rationale_audit import SCHEMA as RATIONALE_SCHEMA, rationale_focus, validate_rationale_audit
 
@@ -146,8 +146,10 @@ def run_story(session, home, destination, from_export=None, model=None, gh_host=
             write_json(staged / "tool-ledger.json", tool_ledger(packet))
             temporary_html = work / "human-spec.pending.html"
             render_story(staged, temporary_html)
-            temporary_agent = work / "agent-spec.pending.md"
-            temporary_agent.write_text(agent_files["agent-spec.md"], encoding="utf-8")
+            temporary_agent = staged / "agent-spec.md"
+            edition_receipt = json.loads((work / "edition-receipt.json").read_bytes())
+            staged_pair = {"agent-spec.md": temporary_agent.read_bytes(), "evidence.md": (staged / "evidence.md").read_bytes()}
+            effective_feedback(edition_receipt, feedback, packet, edition, language, staged_pair)
             for filename in ("article.json", "article-receipt.json", "insights.json", "insights-receipt.json", "brief.json", "brief-receipt.json", "agent-rendered.md", "evidence-rendered.md", "agent-presentation.json", "human-presentation.json", "language.json", "tool-ledger.json"):
                 shutil.copy2(staged / filename, support / filename)
             for filename in ("edition.json", "edition-receipt.json", "editorial-feedback.json", "input.json", "source.json", "evidence.jsonl", "draft-origin.json"):
@@ -200,7 +202,10 @@ def validate_story(directory):
             feedback_path = support / "editorial-feedback.json"
             feedback = validate_feedback(json.loads(feedback_path.read_bytes()), packet, report["source_sha256"]) if feedback_path.is_file() else []
             try:
-                feedback = effective_feedback(receipt, feedback, packet)
+                delivered = {name: (directory / name).read_bytes() for name in ("agent-spec.md", "evidence.md") if (directory / name).is_file()}
+                feedback = effective_feedback(receipt, feedback, packet, edition, report.get("language", "auto"), delivered)
+                if receipt.get("identity", {}).get("final_transfer_policy") == FINAL_POLICY:
+                    errors.extend(validate_resolutions(receipt.get("review"), feedback, edition, packet, review_rules(receipt)))
             except ValueError as error:
                 errors.append(str(error))
             errors.extend(validate_review(receipt.get("review"), feedback, protocol=receipt.get("review_protocol")))

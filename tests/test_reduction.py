@@ -171,6 +171,23 @@ class ReductionTests(unittest.TestCase):
             review = semantic_review(root / "review", consent=True, backend=Backend([response]))
             self.assertEqual(len(review["findings"][0]["occurrences"]), 2)
 
+    def test_semantic_quote_does_not_spread_to_a_different_technical_context(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            quote = "invented private affiliation"
+            self.fixture(root, [quote, "Keep the fixture label `" + quote + "` literally unchanged."])
+            response = {"findings": [{"slot": "S1", "quote": quote, "category": "inference", "necessity": "unnecessary",
+                         "reason": "A personal aside in this selected source field only.", "alternative": "", "related": []}]}
+            review = semantic_review(root / "review", consent=True, backend=Backend([response]))
+            self.assertEqual(len(review["findings"]), 1)
+            self.assertEqual([item["path"][0] for item in review["findings"][0]["occurrences"]], [0])
+            choices = recommended_decisions(review)
+            choices["choices"][review["findings"][0]["id"]] = {"action": "remove"}
+            apply_review(root / "review", choices, root / "reduced")
+            result = [json.loads(line) for line in (root / "reduced/events.jsonl").read_text(encoding="utf-8").splitlines()]
+            self.assertNotIn(quote, result[0]["data"]["content"])
+            self.assertIn("`" + quote + "` literally unchanged", result[1]["data"]["content"])
+
     def test_keep_cannot_be_silently_overridden_by_larger_removal(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

@@ -5,11 +5,12 @@ from .agent_package import EVIDENCE_RENDERER, render_agent_package
 from .language import language_contract, resolve_language
 from .model_io import generate_json
 from .storage import PROMPTS, digest, write_json
-from .story_grounding import resolve_review_locations, validate_grounding
+from .story_grounding import quote_diagnostic, resolve_review_locations, validate_grounding
 
 
 SCHEMA = "transfer-probe/v1"
 ADJUDICATION = "source-dispositions/v1"
+FINAL_POLICY = "final-delivered-pair/v1"
 CHECKS = ("safe_entry", "mechanism_and_branches", "parameters_and_units", "verification_scope", "reuse_limits")
 MAX_DOCUMENT_CHARACTERS = 240000
 
@@ -57,6 +58,9 @@ def validate_probe(result, documents):
                     or not isinstance(anchor.get("quote"), str) or not 1 <= len(anchor["quote"]) <= 500
                     or anchor["quote"] not in documents[anchor["file"]]):
                 errors.append(prefix + "anchor must be a short exact span in agent-spec.md or evidence.md")
+                if (isinstance(anchor, dict) and isinstance(anchor.get("file"), str) and anchor["file"] in documents
+                        and isinstance(anchor.get("quote"), str) and 1 <= len(anchor["quote"]) <= 500):
+                    errors.append(prefix + anchor["file"] + ": " + quote_diagnostic(documents[anchor["file"]], anchor["quote"]))
     return errors
 
 
@@ -73,7 +77,7 @@ def run_probe(edition, events, backend, directory, language="auto", model=None):
     prompt = rules + "\n\nDELIVERED_PAIR_DATA\n" + json.dumps(documents, ensure_ascii=False)
     first_call = len(backend.calls)
     record = {"identity": identity, "documents": documents, "status": "running", "attempts": [],
-              "scope": "First candidate entering source review in this invocation only; later repairs receive source adjudication, not a second fresh-reader probe. No task execution or independent correctness proof."}
+              "scope": "Fresh reader of this exact delivered pair only. Its identity does not cover later changed Markdown bytes. No task execution or independent correctness proof."}
     path = directory / "edition-transfer-probe.json"
     try:
         response = generate_json(backend, prompt, "story-transfer-probe", directory)
@@ -122,22 +126,58 @@ def validate_record(record, events):
     return validate_probe(record.get("result"), documents)
 
 
-def effective_feedback(receipt, external, events):
+def final_pair_matches(record, edition, events, language="auto", documents=None):
+    if documents is None:
+        documents = render_agent_package(edition["article"], events, resolve_language(events, language)["language"])
+    return record.get("identity", {}).get("documents") == {
+        name: digest(content if isinstance(content, bytes) else content.encode("utf-8")) for name, content in documents.items()}
+
+
+def review_rules(receipt):
+    snapshot = receipt.get("review_contract")
+    if (not isinstance(snapshot, dict) or snapshot.get("schema") != "editor-contract/v1"
+            or any(not isinstance(snapshot.get(key), str) for key in ("rules", "structure"))
+            or len(snapshot["rules"]) + len(snapshot["structure"]) > 600000
+            or digest((snapshot["rules"] + snapshot["structure"]).encode("utf-8")) != receipt.get("identity", {}).get("contract_sha256")):
+        raise ValueError("Source adjudication contract snapshot is missing or differs from its identity")
+    return snapshot["rules"]
+
+
+def effective_feedback(receipt, external, events, edition=None, language="auto", documents=None, require_final=True, check_history=True):
     expected = list(external or [])
     if receipt.get("identity", {}).get("transfer_probe") == SCHEMA:
-        record = receipt.get("transfer_probe")
-        errors = validate_record(record, events)
-        if errors:
-            raise ValueError("; ".join(errors))
-        parent, child = receipt["identity"], record["identity"]
-        if (parent.get("transfer_adjudication") != ADJUDICATION or parent.get("input_sha256") != child["input_sha256"]
-                or parent.get("transfer_probe_contract_sha256") != child["contract_sha256"]
-                or parent.get("evidence_renderer") != child["renderer"] or parent.get("model") != child.get("model")
-                or parent.get("feedback_sha256") != fingerprint(external or [])):
-            raise ValueError("Transfer probe does not match the enclosing review identity")
-        expected += probe_feedback(record)
+        parent = receipt["identity"]
+        policy = parent.get("final_transfer_policy")
+        followups = receipt.get("followup_transfer_probes", [])
+        if policy not in (None, FINAL_POLICY) or not isinstance(followups, list) or len(followups) > 9 or followups and not policy:
+            raise ValueError("Unknown final-reader policy or invalid probe history")
+        records = [receipt.get("transfer_probe"), *followups]
+        for record in records:
+            errors = validate_record(record, events)
+            if errors:
+                raise ValueError("; ".join(errors))
+            child = record["identity"]
+            if (parent.get("transfer_adjudication") != ADJUDICATION or parent.get("input_sha256") != child["input_sha256"]
+                    or parent.get("transfer_probe_contract_sha256") != child["contract_sha256"]
+                    or parent.get("evidence_renderer") != child["renderer"] or parent.get("model") != child.get("model")
+                    or parent.get("feedback_sha256") != fingerprint(external or [])):
+                raise ValueError("Transfer probe does not match the enclosing review identity")
+            expected += probe_feedback(record)
+        if policy and require_final and (edition is None or not final_pair_matches(records[-1], edition, events, language, documents)):
+            raise ValueError("Final delivered pair differs from the latest fresh-reader probe")
         if receipt.get("effective_feedback") != expected:
             raise ValueError("Transfer adjudication is not bound to the effective reader feedback")
+        if policy and check_history:
+            history = receipt.get("previous_runs", [])
+            if not isinstance(history, list) or any(not isinstance(previous, dict) for previous in history):
+                raise ValueError("Invalid prior reader history")
+            for previous in history:
+                if previous.get("identity", {}).get("final_transfer_policy") and previous.get("transfer_probe"):
+                    if previous["identity"] != parent:
+                        raise ValueError("Prior reader history has a different review identity; use a new output directory")
+                    prior = effective_feedback(previous, external, events, require_final=False, check_history=False)
+                    if expected[:len(prior)] != prior:
+                        raise ValueError("Previously received reader concerns were dropped or changed")
     return expected
 
 

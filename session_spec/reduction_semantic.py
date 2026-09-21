@@ -91,6 +91,8 @@ def semantic_review(directory, consent=False, backend=None, model=None, gh_host=
             staged.append((slot, quote, item, reason, alternative, related))
         for slot, quote, item, reason, alternative, related in staged:
             for path, original in strings(baseline):
+                if original != slot["original"]:
+                    continue
                 offset = 0
                 while (start := original.find(quote, offset)) >= 0:
                     add_finding(candidates, original, path, start, start + len(quote), item["category"],

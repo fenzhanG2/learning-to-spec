@@ -24,9 +24,9 @@ def render_agent_package(article, events, language, trajectory_style=None):
 def write_agent_package(article, events, language, directory, support):
     files = render_agent_package(article, events, language)
     for name, content in files.items():
-        (directory / name).write_text(content, encoding="utf-8")
-    (support / "agent-rendered.md").write_text(files["agent-spec.md"], encoding="utf-8")
+        (directory / name).write_bytes(content.encode("utf-8"))
+    (support / "agent-rendered.md").write_bytes(files["agent-spec.md"].encode("utf-8"))
     if "evidence.md" in files:
-        (support / "evidence-rendered.md").write_text(files["evidence.md"], encoding="utf-8")
+        (support / "evidence-rendered.md").write_bytes(files["evidence.md"].encode("utf-8"))
         write_json(support / "agent-presentation.json", PRESENTATION)
     return files

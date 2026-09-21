@@ -776,12 +776,20 @@ class StoryPipelineTests(unittest.TestCase):
             feedback_review = edition_review()
             feedback_review["feedback_resolution"] = [{"index": 0, "status": "not_applicable", "note": "Current statement already distinguishes observation and acceptance"}]
             reviewed_feedback = FakeBackend([transfer_review(), feedback_review])
-            run_story(None, root / "copilot", output, from_export=export, resume=True,
+            with self.assertRaisesRegex(ValueError, "different identity"):
+                run_story(None, root / "copilot", output, from_export=export, resume=True,
+                          editorial_feedback=feedback_path, backend_factory=lambda **options: reviewed_feedback)
+            self.assertEqual(reviewed_feedback.calls, [])
+            self.assertTrue(validate_story(output)["valid"])
+            original_output = output
+            output = root / "revised-output"
+            run_story(None, root / "copilot", output, from_export=export, revise_from=original_output,
                       editorial_feedback=feedback_path, backend_factory=lambda **options: reviewed_feedback)
             self.assertEqual(len(reviewed_feedback.calls), 2)
+            self.assertTrue(validate_story(original_output)["valid"])
             self.assertTrue(validate_story(output)["valid"])
             retained = FakeBackend([])
-            run_story(None, root / "copilot", output, from_export=export, resume=True, backend_factory=lambda **options: retained)
+            run_story(None, root / "copilot", output, from_export=export, resume=True, revise_from=original_output, backend_factory=lambda **options: retained)
             self.assertEqual(retained.calls, [])
             self.assertEqual(json.loads((output / "_support/editorial-feedback.json").read_bytes())["issues"][0]["reason"], "Recheck the observed limit")
             write_json(feedback_path, {"source_sha256": "wrong-source", "issues": []})

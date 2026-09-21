@@ -23,7 +23,7 @@ class StoryRefreshTests(unittest.TestCase):
             rendered = "agent-rendered.md" if name == "agent-spec.md" else "evidence-rendered.md"
             (output / "_support" / rendered).write_text(content, encoding="utf-8")
 
-    def make_story(self, root):
+    def make_story(self, root, final_reader=False):
         source = root / "source/events.jsonl"
         source.parent.mkdir()
         source.write_bytes(b"original session")
@@ -35,7 +35,27 @@ class StoryRefreshTests(unittest.TestCase):
         backend = FakeBackend([{"article": article(), "brief": brief(), "insights": insights()}, transfer_review(), edition_review()])
         output = root / "published"
         run_story(None, root / "copilot", output, from_export=base, backend_factory=lambda **settings: backend)
+        if not final_reader:
+            support = output / "_support"
+            receipt = json.loads((support / "edition-receipt.json").read_bytes())
+            receipt["identity"].pop("final_transfer_policy")
+            write_json(support / "edition-receipt.json", receipt)
+            report = json.loads((support / "story-report.json").read_bytes())
+            report["support_hashes"]["edition-receipt.json"] = file_hash(support / "edition-receipt.json")
+            write_json(support / "story-report.json", report)
         return output
+
+    def test_final_reader_binds_delivered_files_not_only_a_fresh_render(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            output = self.make_story(Path(temporary), final_reader=True)
+            self.assertTrue(validate_story(output)["valid"])
+            agent = output / "agent-spec.md"
+            agent.write_text(agent.read_text(encoding="utf-8") + "\nUnreviewed change", encoding="utf-8")
+            report_path = output / "_support/story-report.json"
+            report = json.loads(report_path.read_bytes())
+            report["hashes"]["agent-spec.md"] = file_hash(agent)
+            write_json(report_path, report)
+            self.assertIn("Final delivered pair differs", str(validate_story(output)["issues"]))
 
     def test_refresh_preserves_reviewed_content_evidence_and_original(self):
         with tempfile.TemporaryDirectory() as temporary:

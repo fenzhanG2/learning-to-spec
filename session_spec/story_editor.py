@@ -1,5 +1,7 @@
+import copy
 import json
 import re
+import uuid
 from pathlib import Path
 
 from .patching import apply_data_patches
@@ -14,8 +16,8 @@ from .review_crosswalk import SCHEMA as CROSSWALK_SCHEMA, review_crosswalk
 from .minimization_review import SCHEMA as MINIMIZATION_SCHEMA, minimization_focus, validate_minimization
 from .assertion_scope import SCHEMA as ASSERTION_SCHEMA, assertion_scope
 from .rationale_audit import SCHEMA as RATIONALE_SCHEMA, rationale_focus, validate_rationale_audit
-from .transfer_probe import (ADJUDICATION, SCHEMA as PROBE_SCHEMA, contract as probe_contract, effective_feedback, feedback_context,
-                             probe_feedback, resolve_feedback_locations, run_probe, validate_resolutions)
+from .transfer_probe import (ADJUDICATION, FINAL_POLICY, SCHEMA as PROBE_SCHEMA, contract as probe_contract, effective_feedback, feedback_context, final_pair_matches,
+                             probe_feedback, resolve_feedback_locations, review_rules, run_probe, validate_resolutions)
 from .agent_package import EVIDENCE_RENDERER
 
 
@@ -80,6 +82,43 @@ def prior_review_findings(failures):
             if issue.get("kind") in {"human_requirement", "source_fact", "contract"}:
                 findings[fingerprint(issue)] = issue
     return list(findings.values())
+
+
+def recorded_probe(edition, events, backend, directory, receipt, language, model):
+    probe_directory = directory / ("reader-" + uuid.uuid4().hex[:12])
+    probe_directory.mkdir(exist_ok=False)
+    path = probe_directory / "edition-transfer-probe.json"
+    entry = {"path": path.relative_to(directory).as_posix(), "status": "running"}
+    receipt.setdefault("probe_artifacts", []).append(entry)
+    write_json(directory / "edition-attempt.json", receipt)
+    try:
+        return run_probe(edition, events, backend, probe_directory, language, model)
+    finally:
+        if path.is_file():
+            entry.update(sha256=digest(path.read_bytes()), status=json.loads(path.read_bytes()).get("status"))
+        else:
+            entry["status"] = "failed_before_record"
+        write_json(directory / "edition-attempt.json", receipt)
+
+
+def validate_probe_artifacts(directory, receipt):
+    linked = [receipt.get("transfer_probe"), *receipt.get("followup_transfer_probes", [])]
+    entries = receipt.get("probe_artifacts", [])
+    if not isinstance(entries, list):
+        raise ValueError("Invalid reader artifact history")
+    for entry in entries:
+        if not isinstance(entry, dict) or not isinstance(entry.get("path"), str):
+            raise ValueError("Invalid reader artifact pointer")
+        path = (directory / entry["path"]).resolve()
+        if not path.is_relative_to(directory.resolve()) or path.name != "edition-transfer-probe.json":
+            raise ValueError("Reader artifact escaped the review directory")
+        if entry.get("status") == "failed_before_record" and not path.exists():
+            continue
+        if not path.is_file() or digest(path.read_bytes()) != entry.get("sha256"):
+            raise ValueError("Reader artifact is missing, changed or interrupted before linkage; review its preserved record")
+        record = json.loads(path.read_bytes())
+        if record.get("status") == "completed" and record not in linked:
+            raise ValueError("Completed reader artifact is not linked to active concerns; review its preserved record")
 
 
 def validate_feedback(feedback, events, source_sha256):
@@ -163,13 +202,15 @@ def generate_edition(directory, draft, events, backend, article_validator, model
                 "feedback_sha256": fingerprint(feedback or [])}
     if transfer_probe:
         identity.update(transfer_probe=PROBE_SCHEMA, transfer_adjudication=ADJUDICATION, transfer_probe_contract_sha256=digest(probe_contract(language).encode()),
-                        evidence_renderer=EVIDENCE_RENDERER)
+                        evidence_renderer=EVIDENCE_RENDERER, final_transfer_policy=FINAL_POLICY)
     output, receipt_path = directory / "edition.json", directory / "edition-receipt.json"
     if output.is_file() and receipt_path.is_file():
         receipt = json.loads(receipt_path.read_bytes())
         edition = json.loads(output.read_bytes())
         try:
-            accepted_feedback = effective_feedback(receipt, feedback, events)
+            accepted_feedback = effective_feedback(receipt, feedback, events, edition, language)
+            if transfer_probe:
+                review_rules(receipt)
             feedback_errors = validate_resolutions(receipt.get("review", {}), accepted_feedback, edition, events, contract + brief_contract + brief_review)
             feedback_errors += validate_minimization(receipt.get("review", {}), edition, events, minimization_focus(edition, events))
             feedback_errors += validate_rationale_audit(receipt.get("review", {}), rationale_focus(edition, events), events)
@@ -182,19 +223,45 @@ def generate_edition(directory, draft, events, backend, article_validator, model
             print("[edition cached] whole-document review", flush=True)
             return edition
     attempt_path, candidate_path = directory / "edition-attempt.json", directory / "edition-candidate.json"
-    receipt = {"identity": identity, "status": "running", "failure_protocol": "editorial-only/v1", "failures": {}, "attempts": []}
+    limits = {"editorial": max_repairs, "structural": max_structural_repairs}
+    receipt = {"identity": identity, "status": "running", "failure_protocol": "editorial-only/v1", "failures": {}, "attempts": [],
+               "repair_limits": limits, "repair_counts": {"patches": 0, "editorial": 0, "structural": 0}}
+    if transfer_probe:
+        receipt["review_contract"] = {"schema": "editor-contract/v1", "rules": contract + brief_contract + brief_review, "structure": structure_contract}
     edition = draft
     migrated_findings = []
+    restored_feedback = None
+    if attempt_path.is_file() and not candidate_path.is_file():
+        previous = json.loads(attempt_path.read_bytes())
+        if previous.get("identity", {}).get("final_transfer_policy"):
+            raise ValueError("Cannot resume final-reader history without its bound candidate; use a new output directory")
     if attempt_path.is_file() and candidate_path.is_file():
         previous = json.loads(attempt_path.read_bytes())
         receipt["previous_runs"] = [*previous.get("previous_runs", []),
                                     {key: value for key, value in previous.items() if key != "previous_runs"}]
         previous_identity = previous.get("identity", {})
         reusable = all(previous_identity.get(key) == identity[key] for key in ("schema", "draft_sha256", "input_sha256"))
+        if previous_identity.get("final_transfer_policy"):
+            if previous_identity != identity or previous.get("candidate_sha256") != digest(candidate_path.read_bytes()):
+                raise ValueError("Cannot rebind prior reader history to a different identity or candidate; use a new output directory")
+            review_rules(previous)
+            validate_probe_artifacts(directory, previous)
+            if "transfer_probe" in previous:
+                restored_feedback = effective_feedback(previous, feedback, events, require_final=False)
+                for key in ("transfer_probe", "followup_transfer_probes", "effective_feedback"):
+                    if key in previous:
+                        receipt[key] = copy.deepcopy(previous[key])
+            counts = previous.get("repair_counts")
+            if (previous.get("repair_limits") != limits or not isinstance(counts, dict)
+                    or set(counts) != {"patches", "editorial", "structural"}
+                    or any(type(value) is not int or value < 0 for value in counts.values())
+                    or counts["patches"] > max_repairs + max_structural_repairs):
+                raise ValueError("Cannot resume an unbound or changed repair budget; use a new output directory")
+            receipt["repair_counts"] = dict(counts)
         if reusable and previous.get("candidate_sha256") == digest(candidate_path.read_bytes()):
             edition = json.loads(candidate_path.read_bytes())
             if previous_identity == identity and previous.get("failure_protocol") == receipt["failure_protocol"]:
-                receipt["failures"] = previous.get("failures", {})
+                receipt["failures"] = copy.deepcopy(previous.get("failures", {}))
             else:
                 migrated_findings = [issue for issue in previous.get("failures", {}).get(previous["candidate_sha256"], [])
                                      if issue.get("kind") in {"human_requirement", "source_fact", "contract"}]
@@ -204,15 +271,22 @@ def generate_edition(directory, draft, events, backend, article_validator, model
     context += "\n\nOVERVIEW_CONTRACT\n" + brief_contract + "\n" + brief_review
     if prior_findings or migrated_findings:
         context += "\n\nUNRESOLVED_DRAFT_FINDINGS (待核实，不是事实；旧契约意见需按当前渲染与写作契约重新核对，不机械照抄)\n" + json.dumps([*(prior_findings or []), *migrated_findings], ensure_ascii=False)
-    current_feedback = list(feedback or [])
+    current_feedback = restored_feedback if restored_feedback is not None else list(feedback or [])
     errors = []
-    structural_rounds = 0
-    editorial_rounds = 0
+    structural_rounds = receipt["repair_counts"]["structural"]
+    editorial_rounds = receipt["repair_counts"]["editorial"]
+    patch_attempts = receipt["repair_counts"]["patches"]
     first_call = len(backend.calls)
+    review_only = False
     print("[edition start] read both documents as one coherent deliverable", flush=True)
     try:
-        for attempt in range(max_repairs + max_structural_repairs + 1):
-            if attempt:
+        for attempt in range(2 * (max_repairs + max_structural_repairs + 1)):
+            if attempt and not review_only:
+                if patch_attempts >= max_repairs + max_structural_repairs:
+                    break
+                patch_attempts += 1
+                receipt["repair_counts"]["patches"] = patch_attempts
+                write_json(attempt_path, receipt)
                 repair = (contract + context + feedback_context(current_feedback) + "\n\nSTRUCTURAL_OUTPUT_CONTRACT (只作字段、枚举与引用规则参照，不执行其中的整篇初稿任务)\n"
                           + structure_contract + "\n\nCURRENT_EDITION\n" + json.dumps(edition, ensure_ascii=False)
                           + "\n\nISSUES_TO_VERIFY_AND_REPAIR\n" + json.dumps(errors, ensure_ascii=False)
@@ -234,6 +308,7 @@ def generate_edition(directory, draft, events, backend, article_validator, model
                     errors = [{"reason": "Patch rejected without applying changes: " + str(error)}, *errors]
                     receipt["attempts"].append({"attempt": attempt, "patch_error": str(error)})
                     continue
+            review_only = False
             write_json(candidate_path, edition)
             candidate_hash = digest(candidate_path.read_bytes())
             receipt["candidate_sha256"] = candidate_hash
@@ -244,7 +319,7 @@ def generate_edition(directory, draft, events, backend, article_validator, model
             errors = receipt["failures"].get(candidate_hash, [])
             if not errors and not structural:
                 if transfer_probe and "transfer_probe" not in receipt:
-                    receipt["transfer_probe"] = run_probe(edition, events, backend, directory, language, model)
+                    receipt["transfer_probe"] = recorded_probe(edition, events, backend, directory, receipt, language, model)
                     current_feedback += probe_feedback(receipt["transfer_probe"])
                     receipt["effective_feedback"] = current_feedback
                     write_json(attempt_path, receipt)
@@ -305,6 +380,19 @@ def generate_edition(directory, draft, events, backend, article_validator, model
             errors = [*errors, *[{"reason": issue} for issue in structural]]
             receipt["attempts"].append({"attempt": attempt, "issues": errors})
             if not errors:
+                if transfer_probe:
+                    probes = [receipt["transfer_probe"], *receipt.get("followup_transfer_probes", [])]
+                    if not final_pair_matches(probes[-1], edition, events, language):
+                        followup = recorded_probe(edition, events, backend, directory, receipt, language, model)
+                        receipt.setdefault("followup_transfer_probes", []).append(followup)
+                        additional_feedback = probe_feedback(followup)
+                        current_feedback += additional_feedback
+                        receipt["effective_feedback"] = current_feedback
+                        write_json(attempt_path, receipt)
+                        if additional_feedback:
+                            review_only = True
+                            continue
+                    effective_feedback(receipt, feedback, events, edition, language)
                 write_json(output, edition)
                 receipt.update(status="completed", output_sha256=digest(output.read_bytes()), review=review,
                                review_protocol=REVIEW_PROTOCOL,
@@ -320,6 +408,7 @@ def generate_edition(directory, draft, events, backend, article_validator, model
                     structural_rounds += 1
                 else:
                     editorial_rounds += 1
+                receipt["repair_counts"].update(structural=structural_rounds, editorial=editorial_rounds)
                 if structural_rounds > max_structural_repairs or editorial_rounds > max_repairs:
                     break
         raise ValueError("Whole-document edition failed bounded review; previous published documents preserved")
