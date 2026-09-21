@@ -8,7 +8,9 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from offline_provider import guard_offline_test
+from session_spec.backend import ModelResponseError
 from session_spec.delivery import deliver
+from session_spec.draft_recovery import create_recovery, recovery_snapshot
 from session_spec.fast_quality import CHECKS, CONTRACT, SCHEMA, DraftPrivacyBackend, FastQualityBackend, QualityReviewFailure, review_source_quality, validate_quality, validate_quality_receipt
 from session_spec.privacy_presentation import present_review
 from session_spec.reduction import scan_session, load_review
@@ -30,6 +32,16 @@ class Backend:
         self.calls.append({"label": label})
         self.prompts.append(prompt)
         return copy.deepcopy(self.response)
+
+
+class ResponseSequenceBackend(Backend):
+    def generate(self, prompt, label):
+        self.calls.append({"label": label})
+        self.prompts.append(prompt)
+        response = self.response.pop(0)
+        if isinstance(response, Exception):
+            raise response
+        return copy.deepcopy(response)
 
 
 class FastQualityTests(unittest.TestCase):
@@ -139,6 +151,47 @@ class FastQualityTests(unittest.TestCase):
         self.assertEqual(json.loads(attempts[0].read_bytes())["response"], response)
         self.assertNotIn("PRIVATE_NONOBJECT_RESPONSE", str(caught.exception))
         self.assertFalse((self.support / "fast-quality.json").exists())
+
+    def test_malformed_quality_json_is_retained_then_repaired_within_budget(self):
+        raw = "PRIVATE_INVALID_JSON\r\n{\"quality\": 原文"
+        backend = ResponseSequenceBackend([ModelResponseError("Synthetic private parse detail", raw), {"quality": quality()}])
+        wrapper = FastQualityBackend(backend, self.events, self.artifact, self.support / "story-report.json", self.support / "fast-quality.json")
+        self.assertEqual(review_source_quality(wrapper, []), quality())
+        self.assertEqual(len(backend.calls), 3)
+        attempts = [json.loads(path.read_bytes()) for path in (self.support / "fast-quality-attempts").glob("*.json")]
+        self.assertEqual(len(attempts), 2)
+        failed = next(attempt for attempt in attempts if "json_error" in attempt)
+        self.assertEqual(failed["response"], raw)
+        self.assertEqual(failed["json_error"], "Synthetic private parse detail")
+        self.assertIn("not valid JSON", backend.prompts[1])
+        self.assertNotIn(raw, backend.prompts[1])
+        self.assertNotIn("Synthetic private parse detail", backend.prompts[1])
+        self.assertEqual(json.loads((self.support / "fast-quality.json").read_bytes())["result"], quality())
+
+    def test_repeated_malformed_quality_json_has_recoverable_failure_without_approval(self):
+        raw = "PRIVATE_INVALID_JSON"
+        directory = self.root / "review"
+        scan_session(self.artifact, self.root / "home", directory, audience="local")
+        original = (directory / "review.json").read_bytes()
+        backend = ResponseSequenceBackend([ModelResponseError("Synthetic private parse detail", raw), ModelResponseError("Synthetic private parse detail", raw)])
+        wrapper = FastQualityBackend(backend, self.events, self.artifact, self.support / "story-report.json", self.support / "fast-quality.json")
+        with self.assertRaises(QualityReviewFailure) as caught:
+            review_source_quality(wrapper, [])
+        self.assertEqual(caught.exception.error_code, "draft_quality_invalid")
+        self.assertEqual(len(backend.calls), 3)
+        attempts = [json.loads(path.read_bytes()) for path in (self.support / "fast-quality-attempts").glob("*.json")]
+        self.assertEqual(len(attempts), 2)
+        self.assertTrue(all(attempt["response"] == raw for attempt in attempts))
+        self.assertFalse((self.support / "fast-quality.json").exists())
+        self.assertEqual((directory / "review.json").read_bytes(), original)
+        self.assertNotIn(raw, str(caught.exception))
+        self.assertNotIn("Synthetic private parse detail", str(caught.exception))
+        job = self.root / "recoverable-job"
+        (job / "abstraction/story/_support").mkdir(parents=True)
+        write_json(job / "abstraction/story/_support/fast-candidate-0.json", {"article": {"opening": "Synthetic retained draft"}})
+        identifier = create_recovery(job, "human", caught.exception.error_code)
+        _, snapshot = recovery_snapshot(job, identifier)
+        self.assertIn("human-spec.html", snapshot["files"])
 
     def test_raw_attempt_is_written_before_validation_and_never_overwritten(self):
         response = {"quality": quality()}

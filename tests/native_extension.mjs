@@ -529,16 +529,17 @@ test('all recovered failures offer an explicit decision and default to local fil
     assert.equal(result.privacy, 'incomplete');
     assert.equal(result.upload_allowed, false);
     assert.doesNotMatch(response.textResultForLlm, /PRIVATE_SOURCE|C:\/Synthetic/);
-    assert.match(renderedText(context.logs.join('\n')), /C:\/Synthetic\/draft/);
+    assert.doesNotMatch(context.logs.join('\n'), /Synthetic/);
     assert.match(context.logs.join('\n'), /not as a verified spec/);
     assert.equal(context.calls.some(call => ['review', 'generate', 'package', 'plan', 'publish'].includes(call[0])), false);
     const output = await context.workflow.canvas.open({ sessionId });
     assert.match(output.status, /no upload authority/);
     let options;
-    context.session.ui.select = async (title, choices) => { options = choices; return 'Open saved files'; };
-    await context.workflow.run({ sessionId });
-    assert.deepEqual(options, ['Open saved files', 'Retry or upload draft', 'Create a new snapshot']);
+    context.session.ui.select = async (title, choices) => { options = choices; return undefined; };
+    assert.deepEqual(await context.workflow.run({ sessionId }), { cancelled: true });
+    assert.deepEqual(options, [canvas ? 'Open saved files' : 'Show saved paths', 'Retry or upload draft', 'Create a new snapshot']);
     const decision = context.dialogs.find(dialog => dialog?.requestedSchema?.properties.recovery_action);
+    assert.match(renderedText(decision.message), /C:\/Synthetic\/draft/);
     assert.equal(decision.requestedSchema.properties.recovery_action.default, 'local');
     assert.match(decision.message, /credentials, personal details or embarrassing asides/);
   }
@@ -983,6 +984,93 @@ test('failed progress-panel opening keeps the same job and retries only its comp
   assert.equal(opens, 2);
   assert.match(context.logs.join('\n'), /still running.*rather than starting another/);
   assert.doesNotMatch(context.logs.join('\n'), /PRIVATE_HOST_FAILURE/);
+});
+
+test('non-canvas hosts expose verified selected paths only in the native form and distinguish cancellation', async () => {
+  for (const recovery of [false, true]) {
+    const delivery = recovery
+      ? { kind: 'unvalidated_draft', snapshot_id: 'd'.repeat(64), folder: 'C:/PATH_PRIVATE/draft/deliverables', files: [{ name: 'agent-spec.md', path: 'C:/PATH_PRIVATE/draft/deliverables/agent-spec.md' }] }
+      : { files: ['agent-spec.md', 'evidence.md'].map(name => ({ name, path: '/home/PATH_PRIVATE/deliverables/' + name })), bundle: { path: '/home/PATH_PRIVATE/deliverables.zip' } };
+    const answers = [{ action: 'accept', content: { readers: 'agent', delivery: 'local', privacyMode: 'full' } },
+      recovery ? { action: 'accept', content: { recovery_action: 'local' } } : true,
+      { action: 'accept', content: { location_action: 'done' } }, { action: 'cancel' }];
+    const context = fixture({ canvas: false, delivery, answers });
+    if (recovery) {
+      const original = context.bridge.call;
+      context.bridge.call = async (operation, data) => operation === 'status'
+        ? { status: 'error', stage: 'scan', error_code: 'draft_quality_invalid', draft_available: true }
+        : original(operation, data);
+    }
+    const completed = await context.workflow.tool.handler({}, { sessionId });
+    context.session.ui.select = async (title, options) => {
+      assert.equal(options[0], 'Show saved paths');
+      return options[0];
+    };
+    const result = await context.workflow.tool.handler({}, { sessionId });
+    assert.deepEqual(JSON.parse(result.textResultForLlm), { status: 'saved_paths_shown', job: 'a'.repeat(32) });
+    const location = context.dialogs.find(dialog => dialog?.requestedSchema?.properties.location_action);
+    assert.match(renderedText(location.message), /PATH_PRIVATE/);
+    assert.match(location.message, /No file was opened or uploaded/);
+    for (const file of delivery.files) assert.ok(renderedText(location.message).includes(file.path));
+    assert.doesNotMatch(location.message, /human-spec/);
+    if (recovery) {
+      assert.match(location.message, /Unvalidated draft/);
+      assert.doesNotMatch(location.message, /evidence/);
+    } else {
+      assert.ok(renderedText(location.message).includes(delivery.bundle.path));
+      assert.match(context.logs.join('\n'), /choose Show saved paths/);
+    }
+    const cancelled = await context.workflow.tool.handler({}, { sessionId });
+    assert.deepEqual(JSON.parse(cancelled.textResultForLlm), { cancelled: true, job: 'a'.repeat(32) });
+    assert.doesNotMatch(completed.textResultForLlm + result.textResultForLlm + cancelled.textResultForLlm + JSON.stringify(context.logs), /PATH_PRIVATE/);
+    assert.equal(context.calls.filter(call => call[0] === 'generate').length, recovery ? 0 : 1);
+    assert.equal(context.calls.some(call => ['canvas', 'output_canvas', 'publish'].includes(call[0])), false);
+  }
+});
+
+test('opening an earlier saved output after cancelling a newer review binds the saved job, not its stale progress', async () => {
+  const context = fixture({ answers: [
+    { action: 'accept', content: { readers: 'human', delivery: 'local', privacyMode: 'full' } }, true,
+    { action: 'accept', content: { readers: 'human', delivery: 'local', privacyMode: 'full' } }, false,
+  ] });
+  const original = context.bridge.call;
+  let scans = 0;
+  context.bridge.call = async (operation, data) => {
+    const value = await original(operation, data);
+    if (operation === 'scan') return { job: (++scans === 1 ? 'a' : 'b').repeat(32) };
+    return value;
+  };
+  context.session.rpc.canvas.open = async value => {
+    context.calls.push(['canvas', value]);
+    await context.workflow.canvas.open({ sessionId });
+  };
+  assert.equal((await context.workflow.run({ sessionId })).status, 'done');
+  context.session.ui.select = async () => 'Create a new snapshot';
+  assert.deepEqual(await context.workflow.run({ sessionId }), { cancelled: true, job: 'b'.repeat(32) });
+  const newerInstance = context.calls.filter(call => call[0] === 'canvas').at(-1)[1].instanceId;
+  context.session.ui.select = async () => 'Open saved files';
+  assert.deepEqual(await context.workflow.run({ sessionId }), { status: 'opened_saved_files', job: 'a'.repeat(32) });
+  assert.notEqual(context.calls.filter(call => call[0] === 'canvas').at(-1)[1].instanceId, newerInstance);
+  assert.deepEqual(context.calls.at(-1), ['output_canvas', { job: 'a'.repeat(32) }]);
+  assert.equal(context.calls.filter(call => call[0] === 'generate').length, 1);
+});
+
+test('saved-path display rereads selected files and refuses unavailable or unselected locations', async () => {
+  for (const changed of [
+    { files: [{ name: 'human-spec.html', path: null }], bundle: { path: '/private/deliverables.zip' } },
+    { files: [{ name: 'review.json', path: '/private/RAW_REVIEW_PRIVATE.json' }], bundle: { path: '/private/deliverables.zip' } },
+  ]) {
+    const context = fixture({ canvas: false, answers: [{ action: 'accept', content: { readers: 'human', delivery: 'local', privacyMode: 'full' } }, true] });
+    await context.workflow.run({ sessionId });
+    const dialogCount = context.dialogs.length;
+    const original = context.bridge.call;
+    context.bridge.call = async (operation, data) => operation === 'deliverables' ? changed : original(operation, data);
+    context.session.ui.select = async () => 'Show saved paths';
+    await assert.rejects(context.workflow.run({ sessionId }), /Invalid selected deliverable metadata|selected output locations are unavailable/);
+    assert.equal(context.dialogs.length, dialogCount);
+    assert.doesNotMatch(context.logs.join('\n'), /RAW_REVIEW_PRIVATE/);
+    assert.equal(context.calls.filter(call => call[0] === 'generate').length, 1);
+  }
 });
 
 for (const privacyMode of ['full', 'llm']) {

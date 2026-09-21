@@ -40,6 +40,20 @@ function completionMetadata(delivery, readers) {
   return { files: delivery.files.map(file => project(file, file.name)), bundle: project(delivery.bundle, 'deliverables.zip') };
 }
 
+function selectedFileLocations(delivery, readers, recovery) {
+  if (recovery) {
+    const names = { human: ['human-spec.html'], agent: ['agent-spec.md'], both: ['human-spec.html', 'agent-spec.md'] }[readers];
+    if (!names || delivery?.kind !== 'unvalidated_draft' || !/^[a-f0-9]{64}$/.test(delivery.snapshot_id)
+      || !Array.isArray(delivery.files) || delivery.files.length !== names.length
+      || new Set(delivery.files.map(file => file?.name)).size !== names.length
+      || delivery.files.some(file => !file || !names.includes(file.name))) throw new Error('The selected draft locations could not be verified.');
+  } else completionMetadata(delivery, readers);
+  const locations = [...delivery.files.map(file => [file.name, file.path]),
+    ...(recovery ? [['Selected draft folder', delivery.folder]] : [['deliverables.zip', delivery.bundle.path]])];
+  if (locations.some(([, path]) => typeof path !== 'string' || !path.trim())) throw new Error('The selected output locations are unavailable. Saved files remain local.');
+  return locations.map(([name, path]) => `${safeMarkdown(name)}:\n\n${safeMarkdown(path)}`).join('\n\n');
+}
+
 function contextExcerpt(value, limit = 220) {
   if (typeof value !== 'string') return '';
   return value.length <= limit ? value : value.slice(0, limit) + '\n[Context shortened]';
@@ -473,10 +487,9 @@ export function createWorkflow({ getSession, getBridge, wait = milliseconds => n
     const draft = await checked(invocation, () => bridge().call('deliverables', { job: recovery.job }));
     if (draft.kind !== 'unvalidated_draft' || typeof draft.folder !== 'string' || !draft.folder
         || !/^[a-f0-9]{64}$/.test(draft.snapshot_id)) throw new Error('The private draft location could not be verified. Saved diagnostics remain local.');
-    latestOutput = { job: recovery.job, delivery: 'local', publicationAttempted: false, recovery };
+    latestOutput = { job: recovery.job, readers: recovery.selection.readers, delivery: 'local', publicationAttempted: false, recovery };
     preparingJob = undefined;
     await session().log('An unfinished draft is saved, not as a verified spec. Validation did not pass; privacy review/redaction is incomplete and sensitive details may remain. You can keep it locally, retry with a selected model, or explicitly upload it with these risks.');
-    await session().log('Private draft folder: ' + safeMarkdown(draft.folder));
     if (session().capabilities.ui?.canvases && progressOpenedJob !== recovery.job) {
       openedInstance = randomUUID();
       await checked(invocation, () => session().rpc.canvas.open({ canvasId: 'learning-to-spec', instanceId: openedInstance }));
@@ -487,7 +500,7 @@ export function createWorkflow({ getSession, getBridge, wait = milliseconds => n
       draft_quality_invalid: 'The source-quality check found a factual/material defect or could not return a valid assessment.',
       draft_privacy_invalid: 'Privacy review could not finish within this attempt, or its quotes did not match the generated draft. The model-call limit was not exceeded.',
     };
-    const answer = await form(invocation, `Your draft is saved.\n\n${causes[recovery.errorCode] || 'Draft validation did not pass.'}\n\nRetry reuses the SAME captured conversation and reader/privacy choices with a model you select. It uses additional quota and a new bounded attempt; it never reruns the original coding task.\n\nUpload anyway sends the selected UNVALIDATED draft to ArtifactStore. Facts/citations may be wrong. Privacy review/redaction is incomplete: credentials, personal details or embarrassing asides may remain. Choose the audience and confirm the exact upload before anything is sent.`, {
+    const answer = await form(invocation, `Your draft is saved.\n\nPrivate draft folder:\n\n${safeMarkdown(draft.folder)}\n\n${causes[recovery.errorCode] || 'Draft validation did not pass.'}\n\nRetry reuses the SAME captured conversation and reader/privacy choices with a model you select. It uses additional quota and a new bounded attempt; it never reruns the original coding task.\n\nUpload anyway sends the selected UNVALIDATED draft to ArtifactStore. Facts/citations may be wrong. Privacy review/redaction is incomplete: credentials, personal details or embarrassing asides may remain. Choose the audience and confirm the exact upload before anything is sent.`, {
       recovery_action: { type: 'string', title: 'What would you like to do?', enum: ['local', 'retry', 'upload'], enumNames: ['Keep local draft', 'Retry · choose model', 'Upload anyway · unvalidated draft'], default: 'local' },
     });
     const localResult = { status: 'draft_available', quality: 'unvalidated', privacy: 'incomplete', upload_allowed: false,
@@ -597,8 +610,9 @@ export function createWorkflow({ getSession, getBridge, wait = milliseconds => n
     await completed(scanned.job, invocation, 'Stage 3 of 3: render/export');
     const files = await checked(invocation, () => bridge().call('deliverables', { job: scanned.job }));
     const metadata = completionMetadata(files, selection.readers);
-    latestOutput = { job: scanned.job, delivery: selection.delivery, publicationAttempted: false };
+    latestOutput = { job: scanned.job, readers: selection.readers, delivery: selection.delivery, publicationAttempted: false };
     await session().log('Your spec is ready.\n' + metadata.files.map(file => file.name).join('\n') + '\nZIP: deliverables.zip');
+    if (!session().capabilities.ui?.canvases) await session().log('To find these saved files, run /to-spec and choose Show saved paths. Their exact locations appear only in the native form.');
     if (session().capabilities.ui?.canvases && progressOpenedJob !== scanned.job) {
       const instanceId = randomUUID();
       await checked(invocation, () => session().rpc.canvas.open({ canvasId: 'learning-to-spec', instanceId }));
@@ -715,12 +729,25 @@ export function createWorkflow({ getSession, getBridge, wait = milliseconds => n
     active = (async () => {
       const existing = latestOutput;
       if (existing) {
-        const options = ['Open saved files', ...(existing.recovery && !existing.publicationAttempted ? ['Retry or upload draft'] : []), ...(latestOutput.delivery === 'artifactstore' && !latestOutput.publicationAttempted ? ['Upload saved files'] : []), 'Create a new snapshot'];
+        const outputChoice = session().capabilities.ui?.canvases ? 'Open saved files' : 'Show saved paths';
+        const options = [outputChoice, ...(existing.recovery && !existing.publicationAttempted ? ['Retry or upload draft'] : []), ...(latestOutput.delivery === 'artifactstore' && !latestOutput.publicationAttempted ? ['Upload saved files'] : []), 'Create a new snapshot'];
         const choice = await checked(invocation, () => session().ui.select(existing.recovery ? 'An unvalidated private draft is saved for this conversation.' : 'An export is already ready for this conversation.', options));
         if (!choice) return { cancelled: true };
-        if (choice === 'Open saved files') {
-          if (session().capabilities.ui?.canvases) await checked(invocation, () => session().rpc.canvas.open({ canvasId: 'learning-to-spec', instanceId: openedInstance }));
-          return { status: 'opened_saved_files', job: latestOutput.job };
+        if (choice === outputChoice) {
+          if (session().capabilities.ui?.canvases) {
+            if (preparingJob && preparingJob !== existing.job) openedInstance = randomUUID();
+            preparingJob = undefined;
+            await checked(invocation, () => session().rpc.canvas.open({ canvasId: 'learning-to-spec', instanceId: openedInstance }));
+            return { status: 'opened_saved_files', job: existing.job };
+          }
+          const files = await checked(invocation, () => bridge().call('deliverables', { job: existing.job }));
+          const message = `${existing.recovery ? 'Unvalidated draft · facts/citations may be wrong and privacy review is incomplete.' : 'Your selected files are saved locally.'}\n\nOpen or copy these exact paths on the computer running Copilot. Keep the Markdown files together. No file was opened or uploaded by this form.\n\n${selectedFileLocations(files, existing.readers, Boolean(existing.recovery))}`;
+          const properties = { location_action: { type: 'string', title: 'Saved file locations', enum: ['done'], enumNames: ['Done'], default: 'done' } };
+          if (reviewFormBytes({ message, properties }) > reviewFormByteLimit) throw new Error('The selected output paths exceed the native form size limit. Saved files remain local.');
+          const answer = await form(invocation, message, properties);
+          if (!answer) return { cancelled: true, job: existing.job };
+          if (Object.keys(answer).length !== 1 || answer.location_action !== 'done') throw new Error('Invalid saved-file acknowledgement. No file was opened or uploaded.');
+          return { status: 'saved_paths_shown', job: existing.job };
         }
         if (choice === 'Upload saved files' && options.includes(choice)) return { status: 'done', publication: await publish(latestOutput.job, invocation) };
         if (choice === 'Retry or upload draft' && options.includes(choice)) {

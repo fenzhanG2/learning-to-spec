@@ -3,6 +3,7 @@ import os
 import uuid
 from pathlib import Path
 
+from .backend import ModelResponseError
 from .storage import file_hash, unlinked_path, write_json
 
 
@@ -83,16 +84,25 @@ class FastQualityBackend:
 
         prompt += ("\n\n" + CONTRACT + "\nSOURCE_ATTENTION_CANDIDATES:\n" + json.dumps(handoff_attention(self.events), ensure_ascii=False)
                    + "\nFULL_SOURCE_EVENTS:\n" + json.dumps(self.events, ensure_ascii=False, separators=(",", ":")))
-        response = self.backend.generate(prompt, "bounded-source-quality")
+        parse_error = None
+        try:
+            response = self.backend.generate(prompt, "bounded-source-quality")
+        except ModelResponseError as error:
+            response = error.response
+            parse_error = str(error)
         attempt = {"schema": "bounded-source-review-attempt/v1", "response": response, "label": label,
                    "recorded_call_count": len(self.calls),
-                   "note": "Private unvalidated parsed provider response, not an approval or a deliverable."}
+                   "note": "Private unvalidated provider response, not an approval or a deliverable."}
+        if parse_error is not None:
+            attempt["json_error"] = parse_error
         try:
             path = unlinked_path(attempts / (uuid.uuid4().hex + ".json"))
             with os.fdopen(os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_BINARY", 0), 0o600), "wb") as stream:
                 stream.write((json.dumps(attempt, ensure_ascii=False, indent=2) + "\n").encode("utf-8"))
         except OSError:
             raise RuntimeError("Private quality response could not be retained; no quality approval was recorded") from None
+        if parse_error is not None:
+            raise QualityResponseInvalid("Source-quality response was not valid JSON") from None
         try:
             if not isinstance(response, dict) or set(response) != {"quality"}:
                 raise ValueError("Source-quality response must contain only quality")
