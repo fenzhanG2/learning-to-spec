@@ -2,6 +2,11 @@
 
 ## 双版本减法与一致性
 
+- REVIEW_FOCUS.comparison_groups 中的 source_modality_and_coverage 比较组只提供当前稿件路径，不判断权限、事实或覆盖。按完整来源逐项比较说话者、动作/对象、时间/条件和证明力度：未执行不等于禁止，非目标不等于禁令，未来动作的前置要求既不要求现在执行该动作，也不构成绝对禁止。保留真实禁令及其时间/对象范围，不把缺证据改成许可或新的强制任务。acceptance_scope.note 说明原始义务/禁令、条件性接续与未执行事项的区别；evidence_strength.note 说明正面证据、明确且有范围的否定证据与覆盖未知。测试名/通过数没有给出输入时，既不能推断覆盖，也不能声称从未覆盖。复核 resume、正文、checks、continuation、recipes、trajectory 与 paths；未引用的正文也必须读。
+- 错归给用户的要求/禁令用 human_requirement，引用真实真人原话；错误覆盖断言用有实际来源支持的 source_fact，或引用所提供证明力度规则的 contract。未知覆盖不需要伪造证明“绝不存在”的历史引文。纯 contract 的 evidence=[]，不能发明来源或放宽角色/原文定位校验。对真实但有范围的禁令和否定观察不得机械弱化。以上不是新增审阅类别或模型阶段。
+- REVIEW_FOCUS.comparison_groups 中的 agent_section_responsibilities 比较组用于检查组合后的 Agent 各段新增了什么信息。工作约定/机制、当前状态、接续步骤、复用条件与历史各有职责，不得用换标题的方式重复整段解释。短的操作边界提醒可以必要；不能删掉失败、纠正、命令、参数、测试来源或不确定性来缩短。readability.note 说明主要重复及保留的技术信息；纯重复归 suggestions，不触发事实修复，重复中的矛盾仍是实质问题。跨 Human/Agent 的必要共享事实不算同版冗余，索引缺项不自动是错误。
+- 把 REVIEW_FOCUS.short_claims 中的标题/副标题与正文和原始结果按同一证明力度复核：诊断或定位不等于已修改，正文的谨慎不能替过强标题兜底。当前输入没有触发不等于逻辑永不可达；文件名列表只支持其列举范围，不证明未读内容。continuation 与 recipe 的验收须同样区分原投诉的失败与成功，不得临时发明“例外”让该失败也通过；未定的表示政策保持 proposed，不能替用户决定。提问不证明曾相信或后来推翻了该命题，名称/类型不证明值或历史信念；开篇、转折和结尾同样不得据此编造失败假设或戏剧性教训。narrative_and_scope/evidence_strength/mechanism/acceptance_scope 的已有 note 按来源交代相关差别，不另造反向断言；非任务闲聊及其“曾存在/已省略”的旁白均不必进入可见正文，保留内部覆盖和技术纠正。
+
 - REVIEW_FOCUS.comparison_groups 给出同一稿件中需要一起读的真实路径，不是机器判定的错误，也不是额外事实。missing_paths 仅表示不存在，不自动表示必需内容遗漏；完整稿件和来源仍是权威，索引不是穷尽语义检查。commission_vs_design：把用户要求的结果与建议的实现/展示政策分开。first_move_and_human_continuation：按每条路线的触发条件比较 resume 首步、详版首步的前提/操作/分支和人读收束，要求含义兼容而非逐字一致。accounting_vs_narrative：coverage 是作者归类，不是来源权威，回查原话确认短纠正/否定/授权没有被误删。observed_vs_inferred_decisions：工具结果支持发现，不自动证明历史 actor 曾考虑某套方案；不确定因果补充应归因推断，未来选项属于 proposed 接续。
 - 在对应 checked.note 中给出本稿具体比较结论：acceptance_scope 说明来源要求与建议政策如何分开，agent_handoff 说明各适用路线的首步是否兼容、人读接续位于何处，narrative_and_scope 说明归属与正文的关系。不要以“已检查”代替实际对照；没有缺陷时不要凭索引制造问题。有依据的实质冲突写为 grounded issue，同步修复各处。索引和格式校验都不证明这些语义裁决正确。
 
@@ -77,6 +82,8 @@
 `[GENERALIZED_DETAIL_N: ...]` marks an exporter-approved abstraction, not a verbatim historical statement or tool observation. Do not upgrade it into evidence of successful execution, original authorization or an inferred private fact. Preserve necessary constraints while describing the evidence boundary honestly.
 
 ## Assertion strength and conditional reuse
+
+- For material flow claims, check branch order, exit scope, operation reachability and identifier origin against recorded code. Report reordered checks, wrongly reachable operations or substituted value origins through existing grounded findings; correct affected counterparts. An incomplete path or unknown caller limits the claim—it does not license reconstruction.
 
 - Independent-control scope: for several optional controls, inspect the case where one is absent and another is configured but rejecting. A statement about one control's unset behavior does not establish that every control is bypassed. Require source support for the global predicate, or retain the specific unresolved policy before dependent edits. Check every resume/route/recipe counterpart, not merely the correct main mechanism paragraph. A plain string declaration or name ending in id does not establish a UUID format; distinguish a recorded agent premise from actual type semantics and later human correction. Do not impose real payload or private-log access as a prerequisite for ordinary offline implementation merely to re-ask an answered contract question. Limit negative repository-wide claims to the actual inspected/search scope.
 

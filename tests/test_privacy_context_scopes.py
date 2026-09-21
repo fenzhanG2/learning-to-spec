@@ -594,14 +594,14 @@ class PrivacyPublicationTests(unittest.TestCase):
             checked = []
 
             def guarded_write(path, value):
-                if path == root / "review/review.json":
+                if Path(path).resolve() == (root / "review/review.json").resolve():
                     with self.assertRaisesRegex(ValueError, "busy"):
                         semantic_review(root / "review", consent=True, backend=nested)
                     checked.append(True)
                 return actual_write(path, value)
 
             with patch.object(semantic_helpers, "write_json", guarded_write):
-                semantic_review(root / "review", consent=True, backend=Backend([{"findings": []}]))
+                semantic_review(root / "review/../review", consent=True, backend=Backend([{"findings": []}]))
             self.assertEqual(checked, [True])
             self.assertEqual(nested.calls, [])
 

@@ -1,7 +1,7 @@
 import json
 import re
 
-from .source_excerpt import fenced_text, source_excerpt
+from .source_excerpt import fenced_text, payload_text, source_excerpt, source_payload
 
 
 def short_text(value, limit):
@@ -24,14 +24,15 @@ def argument_focus(arguments):
 
 
 class EvidenceIndex:
-    def __init__(self, events, ledger, language, legacy_roles=False, portable=False, payload_aware=False, complete_short=False):
+    def __init__(self, events, ledger, language, legacy_roles=False, portable=False, payload_aware=False, complete_short=False, complete_payloads=False):
         self.events = {event["ref"]: event for event in events}
         self.calls = {}
         self.language = language
         self.legacy_roles = legacy_roles
         self.portable = portable
         self.payload_aware = payload_aware
-        self.complete_short = complete_short
+        self.complete_short = complete_short or complete_payloads
+        self.complete_payloads = complete_payloads
         for call in ledger["calls"]:
             for ref in [call["request_ref"], *[event["ref"] for event in call["results"]]]:
                 self.calls[ref] = call
@@ -157,7 +158,11 @@ class EvidenceIndex:
             title, context, excerpt, state = self.describe(ref)
             event = self.events[ref]
             if self.complete_short:
-                payload = source_excerpt(event)
+                if self.complete_payloads:
+                    text = payload_text(source_payload(event))
+                    payload = {"characters": len(text), "truncated": False, "segments": [{"text": text}]}
+                else:
+                    payload = source_excerpt(event)
                 lines.extend(["### " + ref, "", context + (" · turn " + str(event["turn"]) if event.get("turn") else ""), "", state, ""])
                 call = self.calls.get(ref)
                 if call and call["results"]:

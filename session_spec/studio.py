@@ -111,6 +111,20 @@ class Studio:
             raise ValueError("Unknown job in this studio session")
         return self.jobs[identifier]
 
+    def delivery_snapshot(self, job):
+        if "generation" not in job or job["status"] == "running":
+            raise ValueError("Only completed deliverable files are available")
+        generation = Path(job["generation"]).resolve()
+        review, baseline = load_review(job.get("review_directory", job["directory"] / "review"))
+        if job.get("approved_choices") and job.get("decision_id") != digest(job["approved_choices"]):
+            raise ValueError("Privacy choices changed; regenerate before downloading")
+        selection = review.get("preferences", {})
+        manifest = validate_delivery(generation, selection)
+        if manifest.get("review_id") != review["review_id"]:
+            raise ValueError("Delivery review identity changed")
+        identity = digest({"generation": str(generation), "decision_id": job.get("decision_id"), "manifest": manifest})
+        return generation, {"id": identity, "files": {**manifest["files"], "deliverables.zip": manifest["archive_sha256"]}}
+
     def action(self, path, data):
         with self.action_lock:
             if getattr(self, "closing", False):
@@ -243,11 +257,13 @@ def handler_for(studio):
         def log_message(self, format_string, *arguments):
             return
 
-        def send(self, status, body, content_type="application/json; charset=utf-8"):
+        def send(self, status, body, content_type="application/json; charset=utf-8", snapshot=None):
             payload = body if isinstance(body, bytes) else json.dumps(body, ensure_ascii=False).encode("utf-8")
             self.send_response(status)
             self.send_header("Content-Type", content_type)
             self.send_header("Content-Length", str(len(payload)))
+            if snapshot is not None:
+                self.send_header("X-Delivery-Snapshot", snapshot)
             self.send_header("Cache-Control", "no-store")
             self.send_header("X-Content-Type-Options", "nosniff")
             self.send_header("Referrer-Policy", "no-referrer")
@@ -292,27 +308,26 @@ def handler_for(studio):
                         result["publication_attempted"] = "package" in job and (job["package"] / "publication.json").exists()
                         if "delivery_result" not in result and job["stage"] == "generate" and job["status"] == "done":
                             result["delivery_result"] = copy.deepcopy(job.get("result"))
+                        if result.get("delivery_result") and job["status"] != "running":
+                            generation, snapshot = studio.delivery_snapshot(job)
+                            result["delivery_result"]["snapshot"] = snapshot
                     self.send(200, result)
                 elif parsed.path == "/api/review":
                     review, baseline = load_review(job.get("review_directory", job["directory"] / "review"))
                     self.send(200, present_review(review, baseline))
                 elif parsed.path == "/api/file":
                     name = query.get("name", [""])[0]
-                    if "generation" not in job or job["status"] == "running":
-                        raise ValueError("Only completed deliverable files are available")
-                    review, baseline = load_review(job.get("review_directory", job["directory"] / "review"))
-                    selection = review.get("preferences", {})
-                    if job.get("approved_choices") and job.get("decision_id") != digest(job["approved_choices"]):
-                        raise ValueError("Privacy choices changed; regenerate before downloading")
-                    if name not in [*filenames(selection.get("readers")), "deliverables.zip"]:
-                        raise ValueError("This file was not selected for delivery")
-                    manifest = validate_delivery(job["generation"], selection)
-                    target = job["generation"] / name if name == "deliverables.zip" else job["generation"] / "deliverables" / name
-                    content = target.read_bytes()
-                    expected = manifest["archive_sha256"] if name == "deliverables.zip" else manifest["files"][name]
-                    if hashlib.sha256(content).hexdigest() != expected:
-                        raise ValueError("Delivery changed while reading")
-                    self.send(200, content, "application/zip" if name == "deliverables.zip" else "text/plain; charset=utf-8")
+                    with studio.action_lock, studio.lock:
+                        generation, snapshot = studio.delivery_snapshot(job)
+                        if self.headers.get("X-Delivery-Snapshot") != snapshot["id"]:
+                            raise ValueError("Delivery snapshot changed or missing; reopen the completed output")
+                        if name not in snapshot["files"]:
+                            raise ValueError("This file was not selected for delivery")
+                        target = generation / name if name == "deliverables.zip" else generation / "deliverables" / name
+                        content = target.read_bytes()
+                        if hashlib.sha256(content).hexdigest() != snapshot["files"][name]:
+                            raise ValueError("Delivery changed while reading")
+                    self.send(200, content, "application/zip" if name == "deliverables.zip" else "text/plain; charset=utf-8", snapshot["id"])
                 else:
                     self.send(404, {"error": "Not found"})
             except (ValueError, OSError, KeyError) as error:

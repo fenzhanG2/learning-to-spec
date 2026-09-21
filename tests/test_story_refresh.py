@@ -1,15 +1,18 @@
 import hashlib
+from contextlib import ExitStack
 import json
 import shutil
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from session_spec.agent_handoff import render_agent
 from session_spec.agent_package import EVIDENCE_RENDERER, LEGACY_PRESENTATION, PRESENTATION, render_agent_package
 from session_spec.cli import parser
 from session_spec.pipeline import write_json
 from session_spec.storage import file_hash
+from session_spec.source_excerpt import payload_text, source_payload
 from session_spec.story_pipeline import render_story, run_story, validate_story
 from session_spec.story_refresh import refresh_story
 from test_story_pipeline import FakeBackend, article, brief, edition_review, insights, packet, transfer_review
@@ -17,13 +20,55 @@ from test_story_pipeline import FakeBackend, article, brief, edition_review, ins
 
 @unittest.skipUnless(shutil.which("node"), "Node.js required for HTML rendering")
 class StoryRefreshTests(unittest.TestCase):
+    def test_complete_and_legacy_published_pairs_validate_without_rebinding(self):
+        for renderer in ("companion/v5", "companion/v6", "companion/v7", "companion/v8"):
+            with self.subTest(renderer=renderer), tempfile.TemporaryDirectory() as temporary:
+                events = packet()
+                events[1]["result"]["content"] += "\r\n" + "prefix " * 1000 + "MIDDLE_PAYLOAD" + " suffix" * 1000
+                if renderer == "companion/v8":
+                    events[0]["human_input"] += "\r\nObservable fixture continuation."
+                    events[0]["text"] = events[0]["human_input"]
+                output = self.make_story(Path(temporary), final_reader=True, renderer=renderer, events=events)
+                self.assertTrue(validate_story(output)["valid"])
+                evidence = (output / "evidence.md").read_bytes()
+                if renderer == "companion/v8":
+                    self.assertIn(payload_text(source_payload(events[1])).encode(), evidence)
+                    self.assertIn(events[0]["human_input"].encode(), evidence)
+                    self.assertIn(b"\r\n", evidence)
+                else:
+                    self.assertNotIn(b"MIDDLE_PAYLOAD", evidence)
+                report = json.loads((output / "_support/story-report.json").read_bytes())
+                self.assertEqual(report["evidence_renderer"], renderer)
+
+    def test_v8_requires_bound_final_probe_and_preserves_refresh_bytes(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            output = self.make_story(root, final_reader=True)
+            destination = root / "refreshed"
+            refresh_story(output, destination)
+            for name in ("agent-spec.md", "evidence.md", "_support/edition-receipt.json"):
+                self.assertEqual((output / name).read_bytes(), (destination / name).read_bytes())
+            self.assertTrue(validate_story(destination)["valid"])
+            support = output / "_support"
+            receipt_path = support / "edition-receipt.json"
+            receipt = json.loads(receipt_path.read_bytes())
+            report_path = support / "story-report.json"
+            report = json.loads(report_path.read_bytes())
+            for field in ("final_transfer_policy", "transfer_probe", "evidence_renderer"):
+                original = receipt["identity"].pop(field)
+                write_json(receipt_path, receipt)
+                report["support_hashes"]["edition-receipt.json"] = file_hash(receipt_path)
+                write_json(report_path, report)
+                self.assertIn("v8 final-pair probe binding", str(validate_story(output)["issues"]))
+                receipt["identity"][field] = original
+
     def legacy_companion_files(self, output):
         for name, content in render_agent_package(article(), packet(), "zh-CN", "handoff-split").items():
             (output / name).write_text(content, encoding="utf-8")
             rendered = "agent-rendered.md" if name == "agent-spec.md" else "evidence-rendered.md"
             (output / "_support" / rendered).write_text(content, encoding="utf-8")
 
-    def make_story(self, root, final_reader=False):
+    def make_story(self, root, final_reader=False, renderer=None, events=None):
         source = root / "source/events.jsonl"
         source.parent.mkdir()
         source.write_bytes(b"original session")
@@ -31,10 +76,15 @@ class StoryRefreshTests(unittest.TestCase):
         base.mkdir()
         write_json(base / "source.json", {"source_path": str(source), "snapshot_bytes": source.stat().st_size,
                                           "source_sha256": hashlib.sha256(source.read_bytes()).hexdigest()})
-        (base / "evidence.jsonl").write_text("\n".join(json.dumps(event) for event in packet()), encoding="utf-8")
+        (base / "evidence.jsonl").write_text("\n".join(json.dumps(event) for event in (events or packet())), encoding="utf-8")
         backend = FakeBackend([{"article": article(), "brief": brief(), "insights": insights()}, transfer_review(), edition_review()])
         output = root / "published"
-        run_story(None, root / "copilot", output, from_export=base, backend_factory=lambda **settings: backend)
+        with ExitStack() as stack:
+            selected_renderer = renderer or (EVIDENCE_RENDERER if final_reader else "companion/v7")
+            if selected_renderer != EVIDENCE_RENDERER:
+                for module in ("agent_package", "story_pipeline", "story_editor", "transfer_probe"):
+                    stack.enter_context(patch("session_spec." + module + ".EVIDENCE_RENDERER", selected_renderer))
+            run_story(None, root / "copilot", output, from_export=base, backend_factory=lambda **settings: backend, language="zh-CN")
         if not final_reader:
             support = output / "_support"
             receipt = json.loads((support / "edition-receipt.json").read_bytes())
@@ -130,7 +180,7 @@ class StoryRefreshTests(unittest.TestCase):
             output = self.make_story(root)
             support = output / "_support"
             report = json.loads((support / "story-report.json").read_bytes())
-            self.assertEqual(report.pop("evidence_renderer"), EVIDENCE_RENDERER)
+            self.assertEqual(report.pop("evidence_renderer"), "companion/v7")
             report["output_schema"] = "story-output/v7"
             write_json(support / "agent-presentation.json", LEGACY_PRESENTATION)
             legacy = render_agent(article(), packet(), "zh-CN", "handoff-legacy")
@@ -146,7 +196,7 @@ class StoryRefreshTests(unittest.TestCase):
             self.assertTrue(validate_story(refreshed)["valid"])
             self.assertTrue(validate_story(output)["valid"])
             current = json.loads((refreshed / "_support/story-report.json").read_bytes())
-            self.assertEqual(current["evidence_renderer"], EVIDENCE_RENDERER)
+            self.assertEqual(current["evidence_renderer"], "companion/v7")
             self.assertEqual(current["output_schema"], "story-output/v9")
             for name in ("article.json", "edition.json", "edition-receipt.json", "input.json"):
                 self.assertEqual(file_hash(support / name), file_hash(refreshed / "_support" / name))

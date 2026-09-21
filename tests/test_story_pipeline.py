@@ -268,6 +268,158 @@ class StorySchemaTests(unittest.TestCase):
             self.assertEqual(receipt["review_protocol"], "grounded-findings/v4")
             self.assertEqual(receipt["identity"]["review_protocol"], "grounded-findings/v4")
 
+    def test_modality_and_unknown_coverage_use_existing_grounded_repair_budget(self):
+        evidence = packet()
+        evidence[0]["human_input"] += " 归档尚未执行。迁移前先检查表结构。不要删除快照。"
+        evidence[1]["result"]["content"] += " Checks passed; input values and assertion bodies were not supplied."
+        draft = {"article": article(), "insights": insights(), "brief": brief()}
+        draft["article"]["agent_markdown"] += "\n\n不要删除快照。E000001。"
+        detail = draft["article"]["agent_detail"]
+        detail["resume"]["verification_boundary"] = "由于未进行归档，所以禁止归档。"
+        detail["continuation"][0]["stop_when"] = "任何迁移请求都必须拒绝。"
+        detail["paths"][0]["reuse_condition"] = "检查证明从未处理时区输入。"
+        original = copy.deepcopy(draft)
+        locations = ["/article/agent_detail/resume/verification_boundary",
+                     "/article/agent_detail/continuation/0/stop_when",
+                     "/article/agent_detail/paths/0/reuse_condition"]
+        quoted = [detail["resume"]["verification_boundary"], detail["continuation"][0]["stop_when"],
+                  detail["paths"][0]["reuse_condition"]]
+        contract_quote = "Unspecified test inputs establish neither coverage nor noncoverage."
+        findings = [
+            {"path": locations[0], "quote": quoted[0], "kind": "human_requirement", "category": "acceptance_scope",
+             "reason": "未执行不能变成禁令。", "evidence": [{"ref": "E000001", "origin": "human", "quote": "归档尚未执行。"}]},
+            {"path": locations[1], "quote": quoted[1], "kind": "human_requirement", "category": "acceptance_scope",
+             "reason": "前置条件不是绝对禁止。", "evidence": [{"ref": "E000001", "origin": "human", "quote": "迁移前先检查表结构。"}]},
+            {"path": locations[2], "quote": quoted[2], "kind": "contract", "category": "evidence_strength",
+             "reason": "未提供输入，覆盖未知。", "contract_quote": contract_quote, "evidence": []},
+        ]
+        corrected = ["归档尚未执行；这不表示禁止，具体权限仍按当前约定。",
+                     "迁移前未检查表结构时暂停；这不要求现在迁移。",
+                     "记录未提供检查输入，时区输入的覆盖情况未确认。"]
+        patches = [{"op": "replace", "path": path, "value": value} for path, value in zip(locations, corrected)]
+        backend = FakeBackend([edition_review(findings), {"patches": patches}, edition_review()])
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            actual = generate_edition(root, draft, evidence, backend, validate_article, max_repairs=1)
+            receipt = json.loads((root / "edition-receipt.json").read_bytes())
+        self.assertEqual(actual["article"]["agent_detail"]["resume"]["verification_boundary"], corrected[0])
+        self.assertEqual(actual["article"]["agent_detail"]["continuation"][0]["stop_when"], corrected[1])
+        self.assertEqual(actual["article"]["agent_detail"]["paths"][0]["reuse_condition"], corrected[2])
+        self.assertEqual(actual["article"]["agent_markdown"], original["article"]["agent_markdown"])
+        self.assertEqual(actual["article"]["agent_detail"]["trajectory"], original["article"]["agent_detail"]["trajectory"])
+        self.assertEqual(draft, original)
+        self.assertIn(contract_quote, backend.prompts[0])
+        self.assertIn("source_modality_and_coverage", backend.prompts[0])
+        self.assertEqual([call["label"] for call in backend.calls],
+                         ["story-edition-review", "story-edition-patch", "story-edition-review"])
+        self.assertEqual(receipt["repair_limits"], {"editorial": 1, "structural": 0})
+        self.assertEqual(receipt["repair_counts"]["patches"], 1)
+
+    def test_generic_source_strength_repairs_use_one_existing_patch_without_erasing_history(self):
+        from session_spec.story_grounding import pointer_value
+        evidence = packet()
+        evidence[0]["human_input"] += " 重试记录会丢失吗？不要丢失记录，具体表示方式尚未决定。顺便说，今天的云很好看。"
+        evidence[1]["result"]["content"] += " 已定位重试分支的缺口，尚未修改。本次未触发重试。文件名列表：worker.py，config.toml。"
+        original_evidence = copy.deepcopy(evidence)
+        draft = {"article": article(), "insights": insights(), "brief": brief()}
+        draft["article"]["title"] = "重试缺口已经修复"
+        draft["article"]["subtitle"] = "修复已经完成"
+        draft["article"]["opening"] = "用户原先相信记录必定丢失，后来该信念被推翻。"
+        detail = draft["article"]["agent_detail"]
+        detail["continuation"][0]["done_when"] = "记录不丢失；若自行认定预期如此，丢失也算成功。"
+        detail["recipes"][0]["verify"] = "允许丢失记录，只要把它称为预期行为。"
+        detail["recipes"][0]["avoid"] = "本次未触发重试，便可删除重试分支。"
+        draft["article"]["agent_markdown"] += "\n\n文件名列表证明项目没有状态存储行为。E000002。"
+        draft["article"]["chapters"][0]["markdown"] += " 本次已省略一段闲聊。"
+        draft["insights"]["closing"]["paragraphs"][0] = "这个失败的旧信念教会用户不能信任名称。"
+        changes = [
+            ("/article/title", "重试缺口已经修复", "重试缺口仍待处理", "evidence_strength", "Diagnosis is not implementation."),
+            ("/article/subtitle", "修复已经完成", "已完成定位，尚未修改", "evidence_strength", "Titles and decks require the same evidence strength as the body."),
+            ("/article/agent_detail/continuation/0/done_when", detail["continuation"][0]["done_when"],
+             "记录不丢失；表示方式未定，不能把未定政策当作验收例外。", "acceptance_scope",
+             "Acceptance must distinguish the reported failure from success across continuation and recipes."),
+            ("/article/agent_detail/recipes/0/verify", detail["recipes"][0]["verify"],
+             "检查记录是否丢失；表示方式仍需决定，不预设某种形式是用户要求。", "acceptance_scope",
+             "Unresolved representation choices remain proposed, not user requirements."),
+            ("/article/agent_detail/recipes/0/avoid", detail["recipes"][0]["avoid"],
+             "本次未触发不证明分支无用；先核对输入域与预期行为。", "mechanism",
+             "Current nonoccurrence is not impossibility or proof of dead logic."),
+            ("/article/agent_markdown", "文件名列表证明项目没有状态存储行为。", "该列表只记录文件名，不能推断未读内容。",
+             "evidence_strength", "A filename listing is not a content inspection."),
+            ("/article/chapters/0/markdown", " 本次已省略一段闲聊。", "", "narrative_and_scope",
+             "Omit irrelevant non-task asides without narrating their presence or omission."),
+            ("/article/opening", draft["article"]["opening"], "用户询问重试记录是否丢失，并说明不能丢失记录。",
+             "evidence_strength", "Questioning a proposition does not establish belief in it or its disproof."),
+            ("/insights/closing/paragraphs/0", draft["insights"]["closing"]["paragraphs"][0],
+             "遇到记录完整性问题时，应检查实际输入和行为；仅凭名称不能确定值或历史信念。", "evidence_strength",
+             "Types and identifiers do not establish actual values or historical beliefs."),
+        ]
+        original = copy.deepcopy(draft)
+        findings = [{"path": path, "quote": old, "kind": "contract", "category": category,
+                     "reason": "保持来源范围与证明力度，不补造事实、政策或旁白。", "contract_quote": rule, "evidence": []}
+                    for path, old, new, category, rule in changes]
+        patches = [{"op": "replace_text", "path": path, "old": old, "value": new}
+                   for path, old, new, category, rule in changes]
+        backend = FakeBackend([edition_review(findings), {"patches": patches}, edition_review()])
+        with tempfile.TemporaryDirectory() as temporary:
+            actual = generate_edition(Path(temporary), draft, evidence, backend, validate_article, max_repairs=1)
+            receipt = json.loads((Path(temporary) / "edition-receipt.json").read_bytes())
+        for path, old, new, category, rule in changes:
+            self.assertEqual(pointer_value(actual, path), pointer_value(original, path).replace(old, new))
+        self.assertEqual(actual["article"]["human_input_coverage"], original["article"]["human_input_coverage"])
+        self.assertEqual(actual["article"]["agent_detail"]["trajectory"], original["article"]["agent_detail"]["trajectory"])
+        self.assertEqual(evidence, original_evidence)
+        self.assertEqual(draft, original)
+        self.assertEqual([call["label"] for call in backend.calls],
+                         ["story-edition-review", "story-edition-patch", "story-edition-review"])
+        self.assertEqual(receipt["repair_limits"], {"editorial": 1, "structural": 0})
+        self.assertEqual(receipt["repair_counts"]["patches"], 1)
+
+    def test_modality_grounding_rejects_invented_authority_and_contracts(self):
+        evidence = packet()
+        evidence[0]["human_input"] += " 不要删除快照。"
+        evidence.append({"ref": "E000003", "type": "assistant.message", "text": "归档尚未执行。"})
+        draft = {"article": article(), "insights": insights(), "brief": brief()}
+        source_issue = edition_review([{"kind": "human_requirement", "category": "acceptance_scope",
+                                       "evidence": [{"ref": "E000001", "origin": "human", "quote": "不要删除快照。"}]}])
+        self.assertEqual(validate_grounding(source_issue, draft, evidence, ""), [])
+        for support in ({"ref": "E000003", "origin": "human", "quote": "归档尚未执行。"},
+                        {"ref": "E000003", "origin": "assistant", "quote": "归档尚未执行。"},
+                        {"ref": "E000001", "origin": "human", "quote": "任何归档都被禁止。"}):
+            with self.subTest(support=support):
+                invalid = copy.deepcopy(source_issue)
+                invalid["issues"][0]["evidence"] = [support]
+                self.assertTrue(validate_grounding(invalid, draft, evidence, ""))
+        contract = (PROMPTS / "agent-detail.md").read_text(encoding="utf-8")
+        contract_issue = edition_review([{"kind": "contract", "category": "evidence_strength", "evidence": [],
+                                          "contract_quote": "Unspecified test inputs establish neither coverage nor noncoverage."}])
+        self.assertEqual(validate_grounding(contract_issue, draft, evidence, contract), [])
+        contract_issue["issues"][0]["contract_quote"] = "Every unmentioned behavior is forbidden."
+        self.assertTrue(validate_grounding(contract_issue, draft, evidence, contract))
+
+    def test_modality_and_redundancy_suggestions_preserve_supported_boundaries(self):
+        evidence = packet()
+        evidence[0]["human_input"] += " 不要删除快照。先检查表结构，再考虑是否迁移。"
+        evidence[1]["result"]["content"] += " This recorded run did not exercise time-zone inputs. New checks were added in this change."
+        draft = {"article": article(), "insights": insights(), "brief": brief()}
+        draft["article"]["agent_markdown"] += "\n\n不要删除快照；迁移前检查表结构。E000001。"
+        detail = draft["article"]["agent_detail"]
+        detail["resume"]["verification_boundary"] = "工具明确报告本次未检查时区输入，不推及其他运行。"
+        detail["continuation"][0]["steps"][0]["action"] = "检查实现和本次新增检查的相关差异，再判断下一步。"
+        detail["paths"][0]["reuse_condition"] = "保留禁止删除快照的约束；未来迁移仍有前置条件。"
+        original = copy.deepcopy(draft)
+        review = edition_review()
+        review["suggestions"] = [{"path": "/article/agent_markdown", "reason": "可压缩重复解释，保留操作边界和失败历史。"}]
+        backend = FakeBackend([review])
+        with tempfile.TemporaryDirectory() as temporary:
+            actual = generate_edition(Path(temporary), draft, evidence, backend, validate_article)
+            receipt = json.loads((Path(temporary) / "edition-receipt.json").read_bytes())
+        self.assertEqual(actual, original)
+        self.assertEqual(draft, original)
+        self.assertEqual([call["label"] for call in backend.calls], ["story-edition-review"])
+        self.assertEqual(receipt["repair_counts"]["patches"], 0)
+        self.assertIn("agent_section_responsibilities", backend.prompts[0])
+
     def test_imported_skill_help_is_not_promoted_to_human_authority(self):
         records = [
             {"ref": "E000001", "origin": "root", "type": "tool.execution_complete", "tool": "Skill", "timestamp": "2026-01-01T00:00:00.100+00:00", "result": {"content": "Launching skill: docs:help"}},

@@ -3,12 +3,16 @@ import re
 from .story_grounding import pointer_value
 
 
-SCHEMA = "review-focus/v5"
+SCHEMA = "review-focus/v6"
 
 
 def comparison_groups(edition):
     article = edition.get("article", {})
     detail = article.get("agent_detail", {})
+    agent_sections = ["/article/agent_markdown"] + ["/article/agent_detail/" + field for field in
+                      ("resume", "continuation", "recipes", "trajectory", "paths")]
+    modality = ["/brief/goals", "/brief/non_goals", "/brief/constraints", "/article/checks",
+                "/article/chapters", "/insights/closing/paragraphs", *agent_sections]
     commission = ["/brief/goals", "/brief/constraints", "/article/agent_markdown"]
     resumption = ["/article/agent_detail/resume/next_action", "/article/agent_detail/resume/workspace",
                   "/article/agent_detail/resume/verification_boundary", "/insights/closing/paragraphs"]
@@ -30,7 +34,9 @@ def comparison_groups(edition):
     for check, category, paths in (("commission_vs_design", "acceptance_scope", commission),
                                    ("first_move_and_human_continuation", "agent_handoff", resumption),
                                    ("accounting_vs_narrative", "narrative_and_scope", relevance),
-                                   ("observed_vs_inferred_decisions", "evidence_strength", decisions)):
+                                   ("observed_vs_inferred_decisions", "evidence_strength", decisions),
+                                   ("source_modality_and_coverage", "acceptance_scope", modality),
+                                   ("agent_section_responsibilities", "readability", agent_sections)):
         present, missing = [], []
         for path in paths:
             try:

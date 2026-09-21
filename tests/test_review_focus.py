@@ -4,6 +4,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from session_spec.review_focus import SCHEMA, review_focus
 from session_spec.story_article import validate_article
@@ -17,11 +18,13 @@ class ReviewFocusTests(unittest.TestCase):
     def test_excerpts_are_exact_and_include_short_and_conflicting_resume_surfaces(self):
         draft = {"article": article(), "brief": brief(), "insights": insights()}
         draft["article"]["title"] = "A compact negative claim"
+        draft["article"]["subtitle"] = "A deck requiring the same source strength"
         draft["article"]["agent_markdown"] += "\n## Another short claim\n"
         original = copy.deepcopy(draft)
         focus = review_focus(draft)
         self.assertEqual(focus["schema"], SCHEMA)
         self.assertIn({"path": "/article/title", "quote": "A compact negative claim"}, focus["short_claims"])
+        self.assertIn({"path": "/article/subtitle", "quote": draft["article"]["subtitle"]}, focus["short_claims"])
         self.assertIn({"path": "/article/agent_markdown", "quote": "## Another short claim"}, focus["short_claims"])
         for field in ("next_action", "verification_boundary"):
             self.assertTrue(any(item["path"].endswith("/resume/" + field) for item in focus["handoff_conditions"]))
@@ -70,7 +73,7 @@ class ReviewFocusTests(unittest.TestCase):
         routes[1]["steps"][0]["action"] = "Inspect a different entry before editing."
         before = copy.deepcopy(draft)
         groups = {item["check"]: item for item in review_focus(draft)["comparison_groups"]}
-        self.assertEqual(len(groups), 4)
+        self.assertEqual(len(groups), 6)
         for index in range(2):
             base = f"/article/agent_detail/continuation/{index}"
             self.assertIn(base + "/done_when", groups["commission_vs_design"]["paths"])
@@ -108,6 +111,89 @@ class ReviewFocusTests(unittest.TestCase):
             generate_edition(Path(temporary), draft, events, backend, validate_article)
             for clause in ("宽泛的修复请求不自动要求", "首步约定", "comparison_groups", "checked.note"):
                 self.assertIn(clause, backend.prompts[0])
+            for clause in ("Not performed does not mean forbidden.",
+                           "Unspecified test inputs establish neither coverage nor noncoverage.",
+                           "Preserve genuine prohibitions at their stated scope",
+                           "Titles and decks require the same evidence strength as the body.",
+                           "Diagnosis is not implementation.",
+                           "Current nonoccurrence is not impossibility or proof of dead logic.",
+                           "A filename listing is not a content inspection.",
+                           "Acceptance must distinguish the reported failure from success across continuation and recipes.",
+                           "Unresolved representation choices remain proposed, not user requirements.",
+                           "Questioning a proposition does not establish belief in it or its disproof.",
+                           "Types and identifiers do not establish actual values or historical beliefs.",
+                           "Omit irrelevant non-task asides without narrating their presence or omission.",
+                           "Review the composed Agent document, not each field in isolation."):
+                self.assertIn(clause, writer.prompts[0])
+                self.assertIn(clause, backend.prompts[0])
+            self.assertEqual(len(writer.calls), 1)
+            self.assertEqual(len(backend.calls), 1)
+
+    def test_modality_groups_cover_uncited_late_counterparts_without_a_verdict(self):
+        draft = {"article": article(), "brief": brief(), "insights": insights()}
+        detail = draft["article"]["agent_detail"]
+        detail["paths"].append({"reason": "Reported absence is not a prohibition.", "reuse_condition": "Inputs were not supplied."})
+        detail["trajectory"].append({"observation": "Do not infer an absolute negative.", "next_state": "Inspect only when needed."})
+        original = copy.deepcopy(draft)
+        groups = {group["check"]: group for group in review_focus(draft)["comparison_groups"]}
+        modality = groups["source_modality_and_coverage"]
+        self.assertEqual(modality["category"], "acceptance_scope")
+        for path in ("/brief/non_goals", "/brief/constraints", "/article/checks", "/article/chapters",
+                     "/article/agent_detail/continuation", "/article/agent_detail/recipes",
+                     "/article/agent_detail/trajectory", "/article/agent_detail/paths"):
+            self.assertIn(path, modality["paths"])
+            self.assertEqual(pointer_value(draft, path), pointer_value(original, path))
+        self.assertEqual(pointer_value(draft, "/article/agent_detail/paths")[-1]["reuse_condition"], "Inputs were not supplied.")
+        roles = groups["agent_section_responsibilities"]
+        self.assertEqual(roles["category"], "readability")
+        self.assertEqual(len(roles["paths"]), 6)
+        self.assertTrue(all(path.startswith("/article/") for path in roles["paths"]))
+        for group in (modality, roles):
+            self.assertEqual(set(group), {"check", "category", "paths", "missing_paths"})
+            self.assertEqual(len(group["paths"]), len(set(group["paths"])))
+        self.assertEqual(draft, original)
+
+    def test_modality_missing_paths_remain_navigation_not_invented_content(self):
+        draft = {"article": {"agent_markdown": "# Contract\nA source-bound summary."}}
+        groups = {group["check"]: group for group in review_focus(draft)["comparison_groups"]}
+        for name in ("source_modality_and_coverage", "agent_section_responsibilities"):
+            self.assertEqual(groups[name]["paths"], ["/article/agent_markdown"])
+            self.assertIn("/article/agent_detail/paths", groups[name]["missing_paths"])
+        self.assertNotIn("agent_detail", draft["article"])
+
+    def test_shared_contract_identity_changes_recheck_without_new_stages(self):
+        import session_spec.story_draft as drafting
+        import session_spec.story_editor as editing
+        draft = {"article": article(), "brief": brief(), "insights": insights()}
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            templates = root / "templates"
+            templates.mkdir()
+            for name in ("story-draft.md", "agent-detail.md", "story-editor.md", "story-editor-method.md",
+                         "story-brief.md", "story-brief-review.md"):
+                (templates / name).write_bytes((drafting.PROMPTS / name).read_bytes())
+            with patch.object(drafting, "PROMPTS", templates), patch.object(editing, "PROMPTS", templates):
+                writer, reviewer = FakeBackend([draft]), FakeBackend([edition_review()])
+                drafting.generate_draft(root, packet(), None, writer)
+                editing.generate_edition(root, draft, packet(), reviewer, validate_article)
+                first_draft = json.loads((root / "joint-draft-receipt.json").read_bytes())["identity"]
+                first_editor = json.loads((root / "edition-receipt.json").read_bytes())["identity"]
+                cached = FakeBackend([])
+                drafting.generate_draft(root, packet(), None, cached)
+                editing.generate_edition(root, draft, packet(), cached, validate_article)
+                self.assertEqual(cached.calls, [])
+                shared = templates / "agent-detail.md"
+                shared.write_text(shared.read_text(encoding="utf-8") + "\nSynthetic contract revision.\n", encoding="utf-8")
+                revised_writer, revised_reviewer = FakeBackend([draft]), FakeBackend([edition_review()])
+                drafting.generate_draft(root, packet(), None, revised_writer)
+                editing.generate_edition(root, draft, packet(), revised_reviewer, validate_article)
+                second_draft = json.loads((root / "joint-draft-receipt.json").read_bytes())["identity"]
+                second_editor = json.loads((root / "edition-receipt.json").read_bytes())["identity"]
+                self.assertNotEqual(first_draft, second_draft)
+                self.assertNotEqual(first_editor["contract_sha256"], second_editor["contract_sha256"])
+                self.assertEqual(second_editor["review_focus"], "review-focus/v6")
+                self.assertEqual([call["label"] for call in revised_writer.calls], ["story-joint-draft"])
+                self.assertEqual([call["label"] for call in revised_reviewer.calls], ["story-edition-review"])
 
     def test_story_support_is_not_silently_accepted_as_empty_canonical_evidence(self):
         with tempfile.TemporaryDirectory() as temporary:
