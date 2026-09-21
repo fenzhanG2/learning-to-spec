@@ -12,9 +12,10 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
-from session_spec.native_bridge import PIPELINE, NativeBridge, protocol_output
+from session_spec.native_bridge import PIPELINE, NativeBridge, open_local_output, protocol_output
 from native_abstract_fixture import mocked_abstraction
 from offline_provider import guard_offline_test
 from session_spec.runtime import FileLease
@@ -323,11 +324,11 @@ with forbid_live_provider():
         self.bridge.studio.jobs[identifier] = job
         return job
 
-    def preview_request(self, preview, route, token=None, method="GET", extra_headers=None):
+    def preview_request(self, preview, route, token=None, method="GET", extra_headers=None, payload=None):
         url = urllib.parse.urlsplit(preview["url"])
         capability = urllib.parse.parse_qs(url.fragment)["access"][0] if token is None else token
         headers = {"Authorization": "Bearer " + capability, **(extra_headers or {})}
-        request = urllib.request.Request(f"http://{url.netloc}{route}", headers=headers, method=method)
+        request = urllib.request.Request(f"http://{url.netloc}{route}", headers=headers, method=method, data=payload)
         try:
             with urllib.request.urlopen(request, timeout=3) as response:
                 return response.status, response.headers, response.read()
@@ -353,7 +354,9 @@ with forbid_live_provider():
             self.assertIn(directive, policy)
         manifest = json.loads(body)
         self.assertEqual(manifest["snapshot_id"], preview["snapshot_id"])
-        self.assertNotIn(str(self.bridge.root), body.decode())
+        self.assertNotIn("local", preview)
+        self.assertEqual(manifest["local"]["folder"], str(job["generation"] / "deliverables"))
+        self.assertEqual(set(manifest["local"]["files"]), {"agent-spec.md", "evidence.md", "deliverables.zip"})
         import hashlib
         for item in [*manifest["files"], manifest["bundle"]]:
             status, headers, content = self.preview_request(preview, "/api/file?name=" + item["name"])
@@ -431,6 +434,7 @@ with forbid_live_provider():
         job["decision_id"] = "different"
         self.assertEqual(self.preview_request(second, "/api/delivery")[0], 409)
         self.assertEqual(self.preview_request(second, "/api/file?name=agent-spec.md")[0], 409)
+
         job["decision_id"] = decision_id
         original = job["generation"]
         replacement = original.with_name("replacement-generation")
@@ -441,6 +445,105 @@ with forbid_live_provider():
         job["generation"] = original
         (job["generation"] / "deliverables/agent-spec.md").write_text("Changed bytes", encoding="utf-8")
         self.assertEqual(self.preview_request(second, "/api/file?name=agent-spec.md")[0], 409)
+
+    def test_open_output_is_user_only_selected_snapshot_scoped_and_revalidated(self):
+        job = self.completed_output()
+        preview = self.bridge.output_canvas(job["id"])
+        origin = "http://" + urllib.parse.urlsplit(preview["url"]).netloc
+        headers = {"Origin": origin, "Content-Type": "application/json"}
+
+        def request(target, **overrides):
+            payload = json.dumps({"target": target, "snapshot_id": preview["snapshot_id"]}).encode()
+            return self.preview_request(preview, "/api/open", method="POST", extra_headers=headers, payload=payload, **overrides)
+
+        with patch("session_spec.native_bridge.open_local_output") as launch:
+            for target in ("agent-spec.md", "evidence.md", "folder"):
+                status, _, body = request(target)
+                self.assertEqual(status, 200)
+                self.assertEqual(json.loads(body), {"status": "dispatched", "target": target})
+                expected = job["generation"] / "deliverables"
+                launch.assert_called_with(expected if target == "folder" else expected / target)
+            launch.reset_mock()
+            for target in ("human-spec.html", "deliverables.zip", "../review", "review.json", str(job["generation"]), "file:///etc/passwd", "https://example.invalid"):
+                self.assertEqual(request(target)[0], 409)
+            self.assertEqual(request("folder", token="wrong")[0], 403)
+            self.assertNotEqual(self.preview_request(preview, "/api/open?target=folder")[0], 200)
+            for header in ({}, {**headers, "Origin": "https://example.invalid"}, {**headers, "Host": "evil.invalid"}):
+                self.assertEqual(self.preview_request(preview, "/api/open", method="POST", extra_headers=header,
+                    payload=json.dumps({"target": "folder", "snapshot_id": preview["snapshot_id"]}).encode())[0], 403)
+            for payload in (b"null", b"[]", b"{", b"{}", b"x" * 513,
+                            json.dumps({"target": "folder", "snapshot_id": "wrong"}).encode(),
+                            json.dumps({"target": "folder", "snapshot_id": preview["snapshot_id"], "path": "private"}).encode()):
+                self.assertEqual(self.preview_request(preview, "/api/open", method="POST", extra_headers=headers, payload=payload)[0], 409)
+            for method in ("PUT", "PATCH", "DELETE", "OPTIONS"):
+                self.assertEqual(self.preview_request(preview, "/api/open", method=method, extra_headers=headers)[0], 405)
+            job["status"] = "running"
+            self.assertEqual(request("folder")[0], 409)
+            job["status"] = "done"
+            job["decision_id"] = "changed"
+            self.assertEqual(request("folder")[0], 409)
+            job["decision_id"] = digest(job["approved_choices"])
+            (job["generation"] / "deliverables/agent-spec.md").write_text("Changed bytes", encoding="utf-8")
+            self.assertEqual(request("agent-spec.md")[0], 409)
+            self.assertEqual(request("folder")[0], 409)
+            launch.assert_not_called()
+
+    def test_open_requires_bound_snapshot_and_projects_launcher_failures_safely(self):
+        job = self.completed_output()
+        preview = self.bridge.progress_canvas(job["id"])
+        origin = "http://" + urllib.parse.urlsplit(preview["url"]).netloc
+        with patch("session_spec.native_bridge.open_local_output", side_effect=OSError("PRIVATE_HANDLER_PATH")) as launch:
+            with self.assertRaises(ValueError):
+                self.bridge.studio.open_output(job["id"], None, "folder")
+            launch.assert_not_called()
+            status, _, body = self.preview_request(preview, "/api/delivery")
+            manifest = json.loads(body)
+            status, _, body = self.preview_request(preview, "/api/open", method="POST",
+                extra_headers={"Origin": origin, "Content-Type": "application/json"},
+                payload=json.dumps({"target": "folder", "snapshot_id": manifest["snapshot_id"]}).encode())
+            self.assertEqual(status, 409)
+            self.assertNotIn(b"PRIVATE_HANDLER_PATH", body)
+
+    def test_platform_openers_use_paths_not_shell_commands_and_bound_posix_wait(self):
+        target = Path(self.temporary.name) / "report with spaces & punctuation.md"
+        with patch("session_spec.native_bridge.sys.platform", "win32"), \
+                patch("session_spec.native_bridge.os.startfile", create=True) as start:
+            open_local_output(target)
+            start.assert_called_once_with(str(target), "open")
+        missing_association = OSError("No associated app")
+        missing_association.winerror = 1155
+        with patch("session_spec.native_bridge.sys.platform", "win32"), \
+                patch("session_spec.native_bridge.os.startfile", create=True, side_effect=missing_association), \
+                patch.dict("os.environ", {"WINDIR": str(Path(self.temporary.name) / "Windows")}), \
+                patch("session_spec.native_bridge.subprocess.Popen") as launch:
+            open_local_output(target)
+            self.assertEqual(launch.call_args.args[0], [str(Path(self.temporary.name) / "Windows/System32/notepad.exe"), str(target)])
+            self.assertFalse(launch.call_args.kwargs["shell"])
+            with self.assertRaises(OSError):
+                open_local_output(target.with_suffix(".html"))
+            self.assertEqual(launch.call_count, 1)
+        for platform, command in (("darwin", "open"), ("linux", "xdg-open")):
+            with patch("session_spec.native_bridge.sys.platform", platform), patch("session_spec.native_bridge.subprocess.run") as run:
+                open_local_output(target)
+                self.assertEqual(run.call_args.args[0], [command, str(target)])
+                self.assertFalse(run.call_args.kwargs["shell"])
+                self.assertEqual(run.call_args.kwargs["timeout"], 5)
+
+    def test_open_refuses_reparse_paths_even_when_saved_bytes_are_valid(self):
+        job = self.completed_output()
+        preview = self.bridge.output_canvas(job["id"])
+        folder = job["generation"] / "deliverables"
+        original = Path.lstat
+
+        def linked_stat(path, *args, **kwargs):
+            value = original(path, *args, **kwargs)
+            return SimpleNamespace(st_mode=value.st_mode, st_file_attributes=0x400) if path == folder else value
+
+        with patch.object(Path, "lstat", linked_stat), patch("session_spec.native_bridge.open_local_output") as launch:
+            for target in ("folder", "agent-spec.md"):
+                with self.assertRaises(ValueError):
+                    self.bridge.studio.open_output(job["id"], preview["snapshot_id"], target)
+            launch.assert_not_called()
 
     def test_readonly_server_start_failure_closes_socket_without_releasing_bridge_lease(self):
         job = self.completed_output()

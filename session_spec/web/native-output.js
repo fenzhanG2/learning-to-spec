@@ -4,6 +4,8 @@ const controls = { 'human-spec.html': 'human', 'agent-spec.md': 'agent', 'eviden
 const cache = new Map();
 let downloadUrl;
 let cleanupTimer;
+let savedOutput;
+let opening = false;
 
 async function waitForExport() {
   if (!access) throw new Error('Reopen the export with /to-spec in Copilot.');
@@ -66,7 +68,7 @@ function previewDocument(content) {
     } else {
       link.removeAttribute('href');
       link.setAttribute('aria-disabled', 'true');
-      link.setAttribute('title', 'Static preview: use the selected download buttons above for companion files.');
+      link.setAttribute('title', 'Static preview: use the Open buttons above for companion files.');
     }
   }
   const policy = "default-src 'none'; script-src 'none'; style-src 'unsafe-inline'; img-src data:; connect-src 'none'; frame-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'";
@@ -85,7 +87,49 @@ function download(name) {
   link.click();
   link.remove();
   cleanupTimer = setTimeout(() => URL.revokeObjectURL(downloadUrl), 60000);
-  status.textContent = `Download requested: ${name}. Your saved file was not regenerated.`;
+  status.textContent = `ZIP copy requested. Check Copilot/browser Downloads for its location. Your original files remain in the folder shown above.`;
+}
+
+async function openOutput(name) {
+  if (!savedOutput || opening) return;
+  opening = true;
+  const button = document.getElementById(name === 'folder' ? 'folder' : controls[name]);
+  const path = name === 'folder' ? savedOutput.local.folder : savedOutput.local.files[name];
+  button.disabled = true;
+  status.textContent = `Opening ${name === 'folder' ? 'output folder' : name}…`;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 10000);
+  try {
+    const response = await fetch('/api/open', {
+      method: 'POST', headers: { Authorization: `Bearer ${access}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ target: name, snapshot_id: savedOutput.snapshot_id }),
+      cache: 'no-store', redirect: 'error', signal: controller.signal,
+    });
+    if (!response.ok || (await response.json()).status !== 'dispatched') throw new Error('Open unavailable');
+    status.textContent = `Sent to your ${name === 'folder' ? 'file manager' : 'default app'}: ${path}. If no window appears, use this path or the ZIP copy.`;
+  } catch {
+    status.textContent = `Could not confirm opening. No automatic retry. Open this saved path manually or download the ZIP copy: ${path}`;
+  } finally {
+    clearTimeout(timer);
+    button.disabled = false;
+    opening = false;
+  }
+}
+
+async function copyFolderPath() {
+  try {
+    await navigator.clipboard.writeText(savedOutput.local.folder);
+    status.textContent = 'Output folder path copied.';
+  } catch {
+    const path = document.getElementById('output-path');
+    const selection = window.getSelection();
+    const range = document.createRange();
+    range.selectNodeContents(path);
+    selection.removeAllRanges();
+    selection.addRange(range);
+    path.focus();
+    status.textContent = 'Copy is unavailable in this host. The folder path is selected; press Ctrl+C (⌘C on Mac).';
+  }
 }
 
 async function prepare() {
@@ -99,13 +143,25 @@ async function prepare() {
     const manifest = await response.json();
     const files = [...manifest.files, { name: 'deliverables.zip', sha256: manifest.bundle.sha256 }];
     if (!files.length || files.length > 4 || new Set(files.map(file => file.name)).size !== files.length) throw new Error('Invalid selected-file manifest.');
+    if (!/^[a-f0-9]{64}$/.test(manifest.snapshot_id) || typeof manifest.local?.folder !== 'string'
+        || !manifest.local.folder || files.some(file => typeof manifest.local.files?.[file.name] !== 'string' || !manifest.local.files[file.name])) {
+      throw new Error('The saved output location is unavailable. Reopen this export in Copilot.');
+    }
+    savedOutput = manifest;
+    document.getElementById('output-path').textContent = manifest.local.folder;
+    document.getElementById('location').hidden = false;
+    document.getElementById('folder').disabled = false;
+    document.getElementById('folder').addEventListener('click', () => openOutput('folder'));
+    document.getElementById('copy-path').addEventListener('click', copyFolderPath);
     let total = 0;
     for (const file of files) {
       if (!Object.hasOwn(controls, file.name) || !/^[a-f0-9]{64}$/.test(file.sha256)) throw new Error('Unexpected export file.');
       const button = document.getElementById(controls[file.name]);
       button.hidden = false;
       button.disabled = true;
-      button.addEventListener('click', () => download(file.name));
+      button.addEventListener('click', () => file.name === 'deliverables.zip' ? download(file.name) : openOutput(file.name));
+      const path = document.getElementById(`${controls[file.name]}-path`);
+      if (path) { path.textContent = file.name; path.title = manifest.local.files[file.name]; }
       const result = await fetch(`/api/file?name=${encodeURIComponent(file.name)}`, options);
       if (!result.ok || !result.body?.getReader) throw new Error('A selected file is unavailable. No partial file was downloaded.');
       const reader = result.body.getReader();
@@ -116,7 +172,7 @@ async function prepare() {
           const part = await reader.read();
           if (part.done) break;
           bytes += part.value.byteLength;
-          if (bytes > 8 * 1024 * 1024 || total + bytes > 24 * 1024 * 1024) throw new Error('This export exceeds the preview limit. Use the local files linked in Copilot.');
+          if (bytes > 8 * 1024 * 1024 || total + bytes > 24 * 1024 * 1024) throw new Error('This export exceeds the preview limit. Use Open output folder or the saved path shown above.');
           chunks.push(part.value);
         }
       } finally { await reader.cancel().catch(() => {}); reader.releaseLock(); }
@@ -136,4 +192,4 @@ async function prepare() {
 }
 
 (new URLSearchParams(location.hash.slice(1)).get('progress') === '1' ? waitForExport().then(prepare) : prepare())
-  .catch(error => { status.textContent = `${error.message} Any already verified downloads remain available.`; });
+  .catch(error => { status.textContent = `${error.message} Saved paths and any already verified ZIP copy remain available.`; });

@@ -21,6 +21,7 @@ class Element {
   addEventListener(name, listener) { this.listeners[name] = listener; }
   click() { this.clicked = true; return this.listeners.click?.(); }
   remove() { this.removed = true; }
+  focus() { this.focused = true; }
 }
 
 function fixture(options = {}) {
@@ -33,6 +34,8 @@ function fixture(options = {}) {
   };
   const selected = options.selected || ['agent-spec.md', 'evidence.md'];
   const manifest = Object.hasOwn(options, 'manifest') ? options.manifest : {
+    snapshot_id: 'a'.repeat(64),
+    local: { folder: 'C:\\Synthetic fixture\\deliverables', files: Object.fromEntries([...selected, 'deliverables.zip'].map(name => [name, `C:\\Synthetic fixture\\deliverables\\${name}`])) },
     files: selected.map(name => ({ name, sha256: contentHash(bodies[name]) })),
     bundle: { sha256: contentHash(bodies['deliverables.zip']) },
   };
@@ -47,6 +50,7 @@ function fixture(options = {}) {
       innerHTML: '',
       content: { querySelectorAll: selector => options.previewNodes?.[selector] || [] },
     } : new Element(tag),
+    createRange: () => ({ selectNodeContents(element) { element.selected = true; } }),
   };
   const calls = [];
   const timers = new Map();
@@ -54,6 +58,7 @@ function fixture(options = {}) {
   let sequence = 0;
   const fallback = route => {
     if (route === '/api/delivery') return { ok: true, json: async () => manifest };
+    if (route === '/api/open') return { ok: true, json: async () => ({ status: 'dispatched' }) };
     const name = new URL(route, 'http://fixture.invalid').searchParams.get('name');
     return new Response(bodies[name], { headers: { 'Content-Type': 'application/octet-stream' } });
   };
@@ -62,6 +67,8 @@ function fixture(options = {}) {
     crypto: options.crypto || webcrypto,
     location: { hash: options.hash ?? '#access=synthetic-read-only-capability' },
     document,
+    navigator: { clipboard: { writeText: options.copy || (async value => { elements['output-path'].copied = value; }) } },
+    window: { getSelection: () => ({ removeAllRanges() {}, addRange() {} }) },
     URL: {
       createObjectURL(blob) { const value = `blob:synthetic-${++sequence}`; urls.set(value, blob); return value; },
       revokeObjectURL(value) { urls.delete(value); },
@@ -120,7 +127,7 @@ test('terminal progress failure stops polling and never exposes private error te
   assert.equal(missing.calls.length, 0);
 });
 
-test('selected downloads use authenticated read-only requests and preserve exact bytes', async () => {
+test('selected files use authenticated reads then explicit scoped opening; ZIP keeps exact bytes', async () => {
   const example = fixture();
   await example.ready;
   assert.deepEqual(example.calls.map(call => call.route), [
@@ -137,12 +144,20 @@ test('selected downloads use authenticated read-only requests and preserve exact
   assert.equal(example.elements.agent.disabled, false);
   assert.equal(example.elements.evidence.disabled, false);
   assert.equal(example.elements.bundle.disabled, false);
-  example.elements.agent.click();
+  await example.elements.agent.click();
+  const open = example.calls.at(-1);
+  assert.equal(open.route, '/api/open');
+  assert.equal(open.request.method, 'POST');
+  assert.equal(open.request.headers.Authorization, 'Bearer synthetic-read-only-capability');
+  assert.deepEqual(JSON.parse(open.request.body), { target: 'agent-spec.md', snapshot_id: 'a'.repeat(64) });
+  assert.match(example.elements.status.textContent, /default app.*agent-spec.md/);
+  assert.equal(example.document.body.children.length, 0);
+  example.elements.bundle.click();
   const anchor = example.document.body.children.at(-1);
-  assert.equal(anchor.download, 'agent-spec.md');
-  assert.equal(await example.urls.get(anchor.href).text(), example.bodies['agent-spec.md']);
-  assert.equal(example.calls.length, 4);
-  assert.match(example.elements.status.textContent, /Download requested/);
+  assert.equal(anchor.download, 'deliverables.zip');
+  assert.deepEqual(Buffer.from(await example.urls.get(anchor.href).arrayBuffer()), example.bodies['deliverables.zip']);
+  assert.equal(example.calls.length, 5);
+  assert.match(example.elements.status.textContent, /ZIP copy requested.*Copilot\/browser Downloads/);
   assert.equal(example.timers.size, 1);
 });
 
@@ -160,9 +175,9 @@ test('human-only selection previews verified HTML in a sandbox and excludes Agen
   assert.deepEqual(example.calls.map(call => call.route), [
     '/api/delivery', '/api/file?name=human-spec.html', '/api/file?name=deliverables.zip',
   ]);
-  example.elements.human.click();
-  const anchor = example.document.body.children.at(-1);
-  assert.equal(await example.urls.get(anchor.href).text(), example.bodies['human-spec.html']);
+  await example.elements.human.click();
+  assert.equal(JSON.parse(example.calls.at(-1).request.body).target, 'human-spec.html');
+  assert.equal(example.document.body.children.length, 0);
 });
 
 test('preview-only DOM projection disables non-fragment links and active elements', async () => {
@@ -189,7 +204,7 @@ test('preview-only DOM projection disables non-fragment links and active element
   for (const link of links.slice(1)) {
     assert.equal(link.values.href, undefined);
     assert.equal(link.values['aria-disabled'], 'true');
-    assert.match(link.values.title, /download buttons above/);
+    assert.match(link.values.title, /Open buttons above/);
   }
   assert.match(html, /Downloaded files keep their original bytes/);
 });
@@ -230,9 +245,9 @@ test('hash mismatch refuses changed bytes while verified siblings remain downloa
   assert.equal(example.elements.bundle.disabled, true);
   assert.equal(example.calls.length, 3);
   assert.match(example.elements.status.textContent, /saved file changed/);
-  example.elements.agent.click();
-  assert.equal(example.calls.length, 3);
-  assert.equal(example.urls.size, 1);
+  await example.elements.agent.click();
+  assert.equal(example.calls.length, 4);
+  assert.equal(example.urls.size, 0);
 });
 
 test('authentication errors and disconnects never retry or dispatch mutations', async () => {
@@ -317,13 +332,66 @@ test('missing browser hashing fails closed rather than accepting unchecked files
 test('cached downloads replace and expire object URLs without further requests', async () => {
   const example = fixture();
   await example.ready;
-  example.elements.agent.click();
+  example.elements.bundle.click();
   const previous = example.document.body.children.at(-1).href;
-  example.elements.evidence.click();
+  example.elements.bundle.click();
   assert.equal(example.urls.has(previous), false);
   assert.equal(example.urls.size, 1);
   const cleanup = [...example.timers.values()].find(timer => timer.delay === 60000);
   cleanup.callback();
   assert.equal(example.urls.size, 0);
   assert.equal(example.calls.length, 4);
+});
+
+test('visible saved location and folder action are separate from browser download destinations', async () => {
+  const example = fixture();
+  await example.ready;
+  assert.equal(example.elements.location.hidden, false);
+  assert.equal(example.elements['output-path'].textContent, 'C:\\Synthetic fixture\\deliverables');
+  assert.equal(example.elements['agent-path'].textContent, 'agent-spec.md');
+  assert.match(example.elements['agent-path'].title, /deliverables\\agent-spec.md$/);
+  await example.elements.folder.click();
+  assert.deepEqual(JSON.parse(example.calls.at(-1).request.body), { target: 'folder', snapshot_id: 'a'.repeat(64) });
+  assert.match(example.elements.status.textContent, /file manager/);
+  await example.elements['copy-path'].click();
+  assert.equal(example.elements['output-path'].copied, example.elements['output-path'].textContent);
+  assert.equal(example.calls.length, 5);
+});
+
+test('failed or disconnected opening retains saved path, never retries and enables explicit recovery', async () => {
+  for (const fail of [() => new Response('unavailable', { status: 409 }), () => { throw new TypeError('disconnected'); }]) {
+    const example = fixture({ fetch: (route, request, fallback) => route === '/api/open' ? fail() : fallback(route) });
+    await example.ready;
+    await example.elements.agent.click();
+    assert.equal(example.calls.length, 5);
+    assert.equal(example.elements.agent.disabled, false);
+    assert.equal(example.elements.bundle.disabled, false);
+    assert.match(example.elements.status.textContent, /Could not confirm.*No automatic retry.*agent-spec.md/);
+    assert.equal(example.timers.size, 0);
+  }
+});
+
+test('opening has a bounded deadline and ignores repeated clicks while waiting', async () => {
+  const example = fixture({ fetch: (route, request, fallback) => route !== '/api/open' ? fallback(route) : new Promise((resolve, reject) => {
+    request.signal.addEventListener('abort', () => reject(new Error('timeout')));
+  }) });
+  await example.ready;
+  const pending = example.elements.agent.click();
+  await example.elements.agent.click();
+  await example.elements.folder.click();
+  assert.equal(example.calls.length, 5);
+  assert.equal(example.elements.agent.disabled, true);
+  [...example.timers.values()].find(timer => timer.delay === 10000).callback();
+  await pending;
+  assert.match(example.elements.status.textContent, /Could not confirm/);
+  assert.equal(example.elements.agent.disabled, false);
+});
+
+test('clipboard denial selects the visible path with keyboard-copy guidance', async () => {
+  const example = fixture({ copy: async () => { throw new Error('denied'); } });
+  await example.ready;
+  await example.elements['copy-path'].click();
+  assert.equal(example.elements['output-path'].selected, true);
+  assert.equal(example.elements['output-path'].focused, true);
+  assert.match(example.elements.status.textContent, /Ctrl\+C/);
 });

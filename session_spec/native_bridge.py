@@ -7,6 +7,7 @@ import os
 import re
 import secrets
 import stat
+import subprocess
 import sys
 import threading
 import time
@@ -29,6 +30,19 @@ from .storage import write_json
 
 
 WEB = Path(__file__).parent / "web"
+
+
+def open_local_output(target):
+    if sys.platform == "win32":
+        try:
+            os.startfile(str(target), "open")
+        except OSError as error:
+            if getattr(error, "winerror", None) != 1155 or target.suffix != ".md":
+                raise
+            subprocess.Popen([str(Path(os.environ["WINDIR"]) / "System32/notepad.exe"), str(target)], shell=False)
+    else:
+        subprocess.run(["open" if sys.platform == "darwin" else "xdg-open", str(target)],
+                       shell=False, check=True, timeout=5, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 
 EVENT_FIELDS = {
@@ -393,7 +407,7 @@ class NativeStudio(DurableStudio):
                 result["error_code"] = job.get("error_code") if job.get("error_code") in {"timeout", "cleanup_unconfirmed", "call_budget"} else "export_failed"
             return result
 
-    def output_delivery(self, identifier, expected=None, name=None):
+    def output_delivery(self, identifier, expected=None, name=None, local_paths=False):
         with self.action_lock, self.lock:
             job = self.job(identifier)
             if getattr(self, "closing", False) or job["status"] != "done" or job["stage"] not in {"generate", "publish", "verify"}:
@@ -413,6 +427,9 @@ class NativeStudio(DurableStudio):
             manifest = {"schema": "native-output/v1", "job": identifier, "snapshot_id": snapshot["id"],
                         "files": [item for item in files if item["name"] != "deliverables.zip"],
                         "bundle": next(item for item in files if item["name"] == "deliverables.zip")}
+            if local_paths:
+                manifest["local"] = {"folder": str(generation / "deliverables"),
+                                     "files": {filename: str(target) for filename, target in targets.items()}}
             if name is None:
                 return manifest
             if name not in targets:
@@ -422,6 +439,24 @@ class NativeStudio(DurableStudio):
             if len(content) > LIMIT or hashlib.sha256(content).hexdigest() != snapshot["files"][name]:
                 raise ValueError("Selected file changed during read")
             return content, snapshot["files"][name]
+
+    def open_output(self, identifier, expected, name):
+        with self.action_lock:
+            if not isinstance(expected, str) or not expected:
+                raise ValueError("A bound delivery snapshot is required")
+            manifest = self.output_delivery(identifier, expected, local_paths=True)
+            if name == "folder":
+                target = Path(manifest["local"]["folder"])
+            elif name in {item["name"] for item in manifest["files"]}:
+                target = Path(manifest["local"]["files"][name])
+            else:
+                raise ValueError("Only selected reports or their output folder can be opened")
+            for parent in (target, *target.parents):
+                info = parent.lstat()
+                if stat.S_ISLNK(info.st_mode) or getattr(info, "st_file_attributes", 0) & getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400):
+                    raise ValueError("Linked output paths cannot be opened")
+            open_local_output(target)
+            return {"status": "dispatched", "target": name}
 
 
 def output_handler(studio, identifier, snapshot_id, token):
@@ -470,7 +505,7 @@ def output_handler(studio, identifier, snapshot_id, token):
                     self.send(200, studio.public_progress(identifier))
                 elif parsed.path == "/api/delivery" and not parsed.query:
                     with binding_lock:
-                        manifest = studio.output_delivery(identifier, snapshot_id)
+                        manifest = studio.output_delivery(identifier, snapshot_id, local_paths=True)
                         snapshot_id = manifest["snapshot_id"]
                     self.send(200, manifest)
                 elif parsed.path == "/api/file" and set(query) == {"name"} and len(query["name"]) == 1:
@@ -485,9 +520,34 @@ def output_handler(studio, identifier, snapshot_id, token):
                 self.send(409, {"error": "Selected output is unavailable or changed; request a new preview after checking job status"})
 
         def do_POST(self):
+            if self.path != "/api/open":
+                self.method_not_allowed()
+                return
+            expected_host = "127.0.0.1:" + str(self.server.server_port)
+            if (self.headers.get("Host") != expected_host
+                    or self.headers.get("Origin") != "http://" + expected_host
+                    or not hmac.compare_digest(self.headers.get("Authorization", ""), "Bearer " + token)):
+                self.send(403, {"error": "Selected output authorization required"})
+                return
+            try:
+                length = int(self.headers.get("Content-Length", "0"))
+                if (self.headers.get("Content-Type") != "application/json" or self.headers.get("Transfer-Encoding")
+                        or not 0 < length <= 512):
+                    raise ValueError("Expected a bounded open request")
+                self.connection.settimeout(5)
+                request = json.loads(self.rfile.read(length))
+                if (not isinstance(request, dict) or set(request) != {"target", "snapshot_id"}
+                        or not isinstance(request["target"], str)
+                        or snapshot_id is None or request["snapshot_id"] != snapshot_id):
+                    raise ValueError("Expected the bound selected output")
+                self.send(200, studio.open_output(identifier, snapshot_id, request["target"]))
+            except (ValueError, OSError, KeyError, TypeError, subprocess.SubprocessError):
+                self.send(409, {"error": "Could not open this saved output. Use the displayed path or download the ZIP; no new export was started."})
+
+        def method_not_allowed(self):
             self.send(405, {"error": "This preview is read-only"})
 
-        do_PUT = do_DELETE = do_PATCH = do_OPTIONS = do_POST
+        do_PUT = do_DELETE = do_PATCH = do_OPTIONS = method_not_allowed
 
     return Handler
 
