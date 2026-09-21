@@ -129,6 +129,28 @@ test('terminal progress failure stops polling and never exposes private error te
   assert.equal(missing.calls.length, 0);
 });
 
+test('failed validation enables only clearly marked local draft files with incomplete privacy warning', async () => {
+  const example = fixture({ hash: '#access=synthetic&progress=1', selected: ['human-spec.html', 'agent-spec.md'],
+    fetch: async (route, request, fallback) => {
+      if (route === '/api/progress') return { ok: true, json: async () => ({ phase: 'draft_available' }) };
+      if (route === '/api/delivery') return { ok: true, json: async () => ({ ...await fallback(route).json(), kind: 'unvalidated_draft' }) };
+      return fallback(route);
+    },
+  });
+  await example.ready;
+  assert.equal(example.elements['draft-warning'].hidden, false);
+  assert.match(example.elements.status.textContent, /Unvalidated.*privacy incomplete.*no upload/);
+  assert.match(example.elements['export-description'].textContent, /not privacy-reviewed/);
+  assert.equal(example.elements.human.disabled, false);
+  assert.equal(example.elements.agent.disabled, false);
+  assert.equal(example.elements.evidence.hidden, true);
+  assert.match(example.elements.bundle.textContent, /private draft/);
+  assert.match(example.elements['human-label'].textContent, /Human draft/);
+  assert.match(example.elements['evidence-hint'].textContent, /No validated evidence/);
+  await example.elements.agent.click();
+  assert.equal(example.calls.at(-1).route, '/api/open');
+});
+
 test('selected files use authenticated reads then explicit scoped opening; ZIP keeps exact bytes', async () => {
   const example = fixture();
   await example.ready;

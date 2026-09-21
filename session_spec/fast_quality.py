@@ -23,7 +23,7 @@ This is one bounded source review, not a benchmark, independent task execution o
 
 
 class QualityReviewFailure(RuntimeError):
-    pass
+    error_code = "draft_quality_invalid"
 
 
 def validate_quality(result, events):

@@ -22,7 +22,9 @@ from pathlib import Path
 from .abstract_privacy import PIPELINE, load_abstract_review, prepare_abstract_review
 from .backend import PreparationBudget, PreparationCallLimitError, PreparationTimeoutError, bounded_seconds, preparation_budget
 from .delivery import preferences
-from .fast_story import DRAFT_FAILURE_CODES, DraftValidationError
+from .fast_story import DraftValidationError
+from .fast_quality import QualityReviewFailure
+from .draft_recovery import CAUSES as RECOVERY_CODES, create_recovery, recovery_snapshot
 from .ingest import origin_of
 from .privacy_presentation import present_review
 from .privacy import HIDDEN_FIELDS, SECRET_FIELD, content_redaction, redaction_enabled, sanitize
@@ -326,6 +328,12 @@ class NativeStudio(DurableStudio):
                     review = prepare_abstract_review(source["path"], self.home, job["directory"] / "review", data["audience"],
                                                      selection, mode, custom=data.get("custom", []), fast=True, **settings)
                     budget.check()
+                except (DraftValidationError, QualityReviewFailure) as error:
+                    try:
+                        job["recovery_id"] = create_recovery(job["directory"], selection["readers"], error.error_code)
+                    except (OSError, ValueError, TypeError, AttributeError, RecursionError) as recovery_error:
+                        job["recovery_error"] = type(recovery_error).__name__
+                    raise
                 finally:
                     failed = sys.exc_info()[0] is not None
                     try:
@@ -368,7 +376,7 @@ class NativeStudio(DurableStudio):
                                 with self.lock:
                                     job["automated_elapsed_seconds"] = spent + time.monotonic() - budget.started
                 return operation()
-            except (PreparationTimeoutError, PreparationCallLimitError, DraftValidationError) as error:
+            except (PreparationTimeoutError, PreparationCallLimitError, DraftValidationError, QualityReviewFailure) as error:
                 with self.lock:
                     job["error_code"] = error.error_code
                 raise
@@ -403,7 +411,7 @@ class NativeStudio(DurableStudio):
             stage, status = job["stage"], job["status"]
             phase = "working"
             if status == "error":
-                phase = "error"
+                phase = "draft_available" if job.get("recovery_id") and job.get("error_code") in RECOVERY_CODES else "error"
             elif stage == "scan":
                 phase = "review" if status == "done" else native_preparation_phase(job["directory"], job.get("privacy_mode")) or "draft"
             elif stage == "generate":
@@ -420,15 +428,16 @@ class NativeStudio(DurableStudio):
                         elapsed = 0
             result = {"schema": "native-progress/v1", "phase": phase, "elapsed_seconds": max(0, int(elapsed)), "limit_seconds": 300}
             if phase == "error":
-                result["error_code"] = job.get("error_code") if job.get("error_code") in {"timeout", "cleanup_unconfirmed", "call_budget", *DRAFT_FAILURE_CODES} else "export_failed"
+                result["error_code"] = job.get("error_code") if job.get("error_code") in {"timeout", "cleanup_unconfirmed", "call_budget", *RECOVERY_CODES} else "export_failed"
             return result
 
     def output_delivery(self, identifier, expected=None, name=None, local_paths=False):
         with self.action_lock, self.lock:
             job = self.job(identifier)
-            if getattr(self, "closing", False) or job["status"] != "done" or job["stage"] not in {"generate", "publish", "verify"}:
+            recovery = job["status"] == "error" and job["stage"] == "scan" and job.get("error_code") in RECOVERY_CODES and bool(job.get("recovery_id"))
+            if getattr(self, "closing", False) or (not recovery and (job["status"] != "done" or job["stage"] not in {"generate", "publish", "verify"})):
                 raise ValueError("Only completed selected outputs can be previewed")
-            generation, snapshot = self.delivery_snapshot(job)
+            generation, snapshot = recovery_snapshot(job["directory"], job["recovery_id"]) if recovery else self.delivery_snapshot(job)
             if expected is not None and expected != snapshot["id"]:
                 raise ValueError("Selected generation changed; request a new output preview")
             files, targets, total = [], {}, 0
@@ -443,6 +452,8 @@ class NativeStudio(DurableStudio):
             manifest = {"schema": "native-output/v1", "job": identifier, "snapshot_id": snapshot["id"],
                         "files": [item for item in files if item["name"] != "deliverables.zip"],
                         "bundle": next(item for item in files if item["name"] == "deliverables.zip")}
+            if recovery:
+                manifest["kind"] = "unvalidated_draft"
             if local_paths:
                 manifest["local"] = {"folder": str(generation / "deliverables"),
                                      "files": {filename: str(target) for filename, target in targets.items()}}
@@ -809,8 +820,10 @@ class NativeBridge:
             return self.progress_canvas(identifier)
         if operation == "status":
             result = self.studio.snapshot(identifier)
-            if result.get("status") == "error" and job.get("error_code") in {"timeout", "cleanup_unconfirmed", "call_budget", *DRAFT_FAILURE_CODES}:
+            if result.get("status") == "error" and job.get("error_code") in {"timeout", "cleanup_unconfirmed", "call_budget", *RECOVERY_CODES}:
                 result["error_code"] = job["error_code"]
+                if job.get("recovery_id") and job.get("error_code") in RECOVERY_CODES:
+                    result["draft_available"] = True
                 if job["error_code"] == "cleanup_unconfirmed":
                     result["next_action"] = "Cleanup is unconfirmed. Do not retry until the local job is checked."
             if result.get("stage") == "scan" and result.get("status") == "running" and job.get("pipeline") == PIPELINE:
@@ -823,6 +836,10 @@ class NativeBridge:
                 raise ValueError("Wait for completed privacy review")
             return self.bound_review(job)
         if operation == "deliverables":
+            if job["status"] == "error" and job.get("recovery_id") and job.get("error_code") in RECOVERY_CODES:
+                manifest = self.studio.output_delivery(identifier, local_paths=True)
+                return {"job": identifier, "kind": "unvalidated_draft", "folder": manifest["local"]["folder"],
+                        "files": [{**item, "path": manifest["local"]["files"][item["name"]]} for item in manifest["files"]]}
             return self.studio.delivered(identifier)
         if operation == "generate":
             if data.get("pipeline") != PIPELINE:

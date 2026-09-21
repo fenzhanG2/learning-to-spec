@@ -377,6 +377,8 @@ export function createWorkflow({ getSession, getBridge, wait = milliseconds => n
       if (value.status === 'error' && publishing) {
         throw new PreparationFailure('publication_unconfirmed', 'Local files remain available. The remote publication outcome is unknown; an upload may have partially or fully completed. Do not retry blindly. Check the remote outcome before attempting another upload.');
       }
+      if (value.status === 'error' && value.stage === 'scan' && value.draft_available === true
+          && ['draft_references_invalid', 'draft_structure_invalid', 'draft_quality_invalid'].includes(value.error_code)) return value;
       if (value.status === 'error' && value.stage === 'scan' && value.error_code === 'cleanup_unconfirmed') {
         throw new PreparationFailure('cleanup_unconfirmed', 'Preparation could not confirm worker cleanup. Do not start another export until cleanup has been checked. Any saved work is preserved; no automatic restart or upload was started.');
       }
@@ -446,7 +448,21 @@ export function createWorkflow({ getSession, getBridge, wait = milliseconds => n
         await session().log('The progress panel could not open. Your export is still running; wait here for its result rather than starting another export.', { ephemeral: false });
       }
     }
-    await completed(scanned.job, invocation, preparation);
+    const prepared = await completed(scanned.job, invocation, preparation);
+    if (prepared.status === 'error' && prepared.draft_available === true) {
+      const draft = await checked(invocation, () => bridge().call('deliverables', { job: scanned.job }));
+      if (draft.kind !== 'unvalidated_draft' || typeof draft.folder !== 'string' || !draft.folder) throw new Error('The private draft location could not be verified. Saved diagnostics remain local.');
+      latestOutput = { job: scanned.job, delivery: 'local', publicationAttempted: true, recovery: true };
+      preparingJob = undefined;
+      await session().log('An unfinished draft is available in the output panel. Validation did not pass, so it is clearly marked unvalidated. Privacy review/redaction is incomplete; sensitive details may remain. Open it locally for reference, not as a verified spec. It cannot be uploaded by this workflow.');
+      await session().log('Private draft folder: ' + safeMarkdown(draft.folder));
+      if (session().capabilities.ui?.canvases && progressOpenedJob !== scanned.job) {
+        openedInstance = randomUUID();
+        await checked(invocation, () => session().rpc.canvas.open({ canvasId: 'learning-to-spec', instanceId: openedInstance }));
+      }
+      return { status: 'draft_available', quality: 'unvalidated', privacy: 'incomplete', upload_allowed: false,
+        message: 'Open the local unfinished draft in the output panel. It may contain errors and sensitive content; do not present it as validated or safe to share.' };
+    }
     const review = await checked(invocation, () => bridge().call('review', { job: scanned.job }));
     if (review.original_source_sha256 !== source.sha256 || review.preferences?.readers !== selection.readers
       || review.preferences?.destination !== selection.delivery || review.audience !== audience) throw new Error('Prepared draft does not match the captured source or export settings.');
@@ -634,7 +650,7 @@ export function createWorkflow({ getSession, getBridge, wait = milliseconds => n
       const existing = latestOutput;
       if (existing) {
         const options = ['Open saved files', ...(latestOutput.delivery === 'artifactstore' && !latestOutput.publicationAttempted ? ['Upload saved files'] : []), 'Create a new snapshot'];
-        const choice = await checked(invocation, () => session().ui.select('An export is already ready for this conversation.', options));
+        const choice = await checked(invocation, () => session().ui.select(existing.recovery ? 'An unvalidated private draft is saved for this conversation.' : 'An export is already ready for this conversation.', options));
         if (!choice) return { cancelled: true };
         if (choice === 'Open saved files') {
           if (session().capabilities.ui?.canvases) await checked(invocation, () => session().rpc.canvas.open({ canvasId: 'learning-to-spec', instanceId: openedInstance }));

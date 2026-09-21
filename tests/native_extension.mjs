@@ -512,6 +512,34 @@ test('tool invocation returns safe bounded failure details instead of an opaque 
   }
 });
 
+test('unvalidated draft is returned locally without review approval, regeneration or upload, including CLI hosts', async () => {
+  for (const canvas of [true, false]) {
+    const context = fixture({ canvas, answers: [{ action: 'accept', content: { readers: 'both', delivery: 'artifactstore', privacyMode: 'llm' } }, 'Just me · root'] });
+    context.session.ui.select = async () => 'Just me · root';
+    const original = context.bridge.call;
+    context.bridge.call = async (operation, data) => {
+      if (operation === 'status') return { status: 'error', stage: 'scan', error_code: 'draft_quality_invalid', draft_available: true, error: 'PRIVATE_SOURCE' };
+      if (operation === 'deliverables') return { kind: 'unvalidated_draft', folder: 'C:/Synthetic/draft', files: [] };
+      return original(operation, data);
+    };
+    const response = await context.workflow.tool.handler({}, { sessionId });
+    const result = JSON.parse(response.textResultForLlm);
+    assert.equal(result.status, 'draft_available');
+    assert.equal(result.privacy, 'incomplete');
+    assert.equal(result.upload_allowed, false);
+    assert.doesNotMatch(response.textResultForLlm, /PRIVATE_SOURCE|C:\/Synthetic/);
+    assert.match(renderedText(context.logs.join('\n')), /C:\/Synthetic\/draft/);
+    assert.match(context.logs.join('\n'), /not as a verified spec/);
+    assert.equal(context.calls.some(call => ['review', 'generate', 'package', 'plan', 'publish'].includes(call[0])), false);
+    const output = await context.workflow.canvas.open({ sessionId });
+    assert.match(output.status, /no upload authority/);
+    let options;
+    context.session.ui.select = async (title, choices) => { options = choices; return 'Open saved files'; };
+    await context.workflow.run({ sessionId });
+    assert.deepEqual(options, ['Open saved files', 'Create a new snapshot']);
+  }
+});
+
 test('publication failure preserves local files and reports an unknown remote outcome without leaking diagnostics or retrying', async () => {
   for (const remoteState of [{ stage: 'publish', error_code: 'PRIVATE_PROVIDER_CODE' }, { stage: 'scan', error_code: 'timeout' }]) {
     const pending = { ...savedReview('full', 0), delivery: 'artifactstore', audience: 'root' };

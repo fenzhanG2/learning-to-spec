@@ -42,7 +42,7 @@ async function waitForExport() {
       document.getElementById('progress-detail').textContent = messages[value.error_code] || 'A validation or provider error stopped this export. See the conversation result; saved diagnostics remain local.';
       throw new Error(document.getElementById('progress-detail').textContent);
     }
-    if (value.phase === 'ready') { panel.hidden = true; return; }
+    if (value.phase === 'ready' || value.phase === 'draft_available') { panel.hidden = true; return; }
     const label = Object.hasOwn(labels, value.phase) ? labels[value.phase] : labels.working;
     document.getElementById('progress-title').textContent = label[0];
     document.getElementById('progress-detail').textContent = label[1];
@@ -119,6 +119,8 @@ async function prepare() {
     const response = await fetch('/api/delivery', options);
     if (!response.ok) throw new Error('This saved export is unavailable. Reopen it with /to-spec.');
     const manifest = await response.json();
+    if (manifest.kind && manifest.kind !== 'unvalidated_draft') throw new Error('Unknown output quality status.');
+    const recovery = manifest.kind === 'unvalidated_draft';
     const files = [...manifest.files, { name: 'deliverables.zip', sha256: manifest.bundle.sha256 }];
     if (!files.length || files.length > 4 || new Set(files.map(file => file.name)).size !== files.length) throw new Error('Invalid selected-file manifest.');
     if (!/^[a-f0-9]{64}$/.test(manifest.snapshot_id) || typeof manifest.local?.folder !== 'string'
@@ -126,6 +128,14 @@ async function prepare() {
       throw new Error('The saved output location is unavailable. Reopen this export in Copilot.');
     }
     savedOutput = manifest;
+    if (recovery) {
+      document.getElementById('draft-warning').hidden = false;
+      document.getElementById('export-description').textContent = 'These are unvalidated, unredacted private drafts, not privacy-reviewed deliverables. Local hashes detect file changes; they do not establish correctness or safe sharing. This panel cannot upload anything.';
+      document.getElementById('bundle').textContent = 'Download private draft ZIP';
+      document.getElementById('human-label').textContent = 'Open Human draft ↗';
+      document.getElementById('agent-label').textContent = 'Open Agent draft ↗';
+      document.getElementById('evidence-hint').textContent = 'No validated evidence companion is included. Check facts and citations against the original session.';
+    }
     document.getElementById('output-path').textContent = manifest.local.folder;
     document.getElementById('location').hidden = false;
     document.getElementById('folder').disabled = false;
@@ -161,7 +171,8 @@ async function prepare() {
       if (file.name === 'deliverables.zip') cache.set(file.name, blob);
       button.disabled = false;
     }
-    status.textContent = 'Ready · saved locally · no ArtifactStore upload by this panel';
+    status.textContent = recovery ? 'Unvalidated draft saved locally · privacy incomplete · no upload'
+      : 'Ready · saved locally · no ArtifactStore upload by this panel';
   } finally { clearTimeout(timer); }
 }
 

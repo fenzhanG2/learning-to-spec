@@ -342,6 +342,8 @@ class FastStoryTests(unittest.TestCase):
         self.assertIn("Architecture is conditional, not disabled for compactness", backend.prompts[0])
         self.assertIn('"decision":"include"', backend.prompts[0])
         self.assertIn("assistant-quoted archives, requests and proposals alone cannot establish", backend.prompts[0])
+        self.assertIn("Never describe a user's self-criticism as the assistant's", backend.prompts[0])
+        self.assertIn("Do not turn a closing personal/privacy aside into a technical non-goal", backend.prompts[0])
         self.assertTrue(validate_fast_story(self.output)["valid"])
 
     def test_validation_preserves_terminal_timeout_and_cleanup_markers(self):
