@@ -13,7 +13,7 @@ Cover invalid CLI model/options, complete draft and repair schemas, source-refer
 Use a hash-pinned public SWE-chat or wholly synthetic fixture. Give every attempt a fresh session UUID and isolated output/profile directory. Never discover or select unrelated local sessions. Run the production `NativeBridge` operations, not a parallel generation implementation:
 
 1. Capture the fixture with explicit readers, local delivery and Smart-redaction selection.
-2. Scan through actual Copilot CLI inference: joint abstraction, then rules and combined source-quality/privacy review. Keep the shared time and call limits enabled.
+2. Scan through actual Copilot CLI inference: joint abstraction, separate source-quality review, then rules and a draft-only privacy review. Keep the shared time and call limits enabled.
 3. Require completed source-quality and privacy review before export. Bind explicit test decisions to the exact review and abstraction. Mark these as synthetic-fixture decisions, not real user consent.
 4. Generate deterministically and verify Human HTML, Agent Markdown, separate evidence, ZIP and read-only download hashes. No additional inference occurs after approval.
 5. Read both outputs against the source. Check original problem, decisions, failed paths, uncertainty, next action and technical preservation. Check injected privacy canaries in every selected output; lexical absence alone is not proof of anonymity.
