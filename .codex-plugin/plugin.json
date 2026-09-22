@@ -1,6 +1,6 @@
 {
   "name": "learning-to-spec",
-  "version": "0.7.1",
+  "version": "0.7.2",
   "description": "Compatibility metadata only. Native /to-spec export runs in GitHub Copilot, not Codex.",
   "author": {"name": "Local"},
   "interface": {

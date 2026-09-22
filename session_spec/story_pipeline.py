@@ -202,11 +202,11 @@ def validate_story(directory):
         else:
             edition = json.loads(edition_path.read_bytes())
             receipt = json.loads(receipt_path.read_bytes())
-            if report.get("evidence_renderer") == "companion/v8":
+            if report.get("evidence_renderer") in ("companion/v8", "companion/v9"):
                 identity = receipt.get("identity", {})
-                if (identity.get("evidence_renderer") != "companion/v8" or identity.get("transfer_probe") != PROBE_SCHEMA
+                if (identity.get("evidence_renderer") != report["evidence_renderer"] or identity.get("transfer_probe") != PROBE_SCHEMA
                         or identity.get("final_transfer_policy") != FINAL_POLICY):
-                    errors.append("Complete evidence publication requires its v8 final-pair probe binding")
+                    errors.append("Complete evidence publication requires its " + report["evidence_renderer"] + " final-pair probe binding")
             errors.extend(validate_edition(edition, packet, validate_article))
             feedback_path = support / "editorial-feedback.json"
             feedback = validate_feedback(json.loads(feedback_path.read_bytes()), packet, report["source_sha256"]) if feedback_path.is_file() else []
@@ -246,7 +246,7 @@ def validate_story(directory):
             errors.append("Unknown evidence renderer policy")
     if report.get("output_schema") in {"story-output/v8", "story-output/v9"}:
         markdown_files = report["output_schema"] == "story-output/v9"
-        if not isinstance(report.get("evidence_renderer"), str) or report.get("evidence_renderer") not in ({"companion/v2", "companion/v3", "companion/v4", "companion/v5", "companion/v6", "companion/v7", "companion/v8"} if markdown_files else {"companion/v1", "companion/v2"}):
+        if not isinstance(report.get("evidence_renderer"), str) or report.get("evidence_renderer") not in ({"companion/v2", "companion/v3", "companion/v4", "companion/v5", "companion/v6", "companion/v7", "companion/v8", "companion/v9"} if markdown_files else {"companion/v1", "companion/v2"}):
             errors.append("Unknown companion evidence renderer policy")
         if markdown_files and report.get("evidence_renderer") == "companion/v3":
             trajectory_style = "handoff-portable"
@@ -258,6 +258,8 @@ def validate_story(directory):
             trajectory_style = "handoff-portable-v4"
         if markdown_files and report.get("evidence_renderer") in ("companion/v7", "companion/v8"):
             trajectory_style = "handoff-portable-v5"
+        if markdown_files and report.get("evidence_renderer") == "companion/v9":
+            trajectory_style = "handoff-portable-v6"
         if markdown_files or report.get("evidence_renderer") == "companion/v2":
             policy = support / "agent-presentation.json"
             expected_policy = PRESENTATION if markdown_files else LEGACY_PRESENTATION
@@ -266,8 +268,8 @@ def validate_story(directory):
         for filename, root, hashes in (("evidence.md", directory, report["hashes"]), ("evidence-rendered.md", support, report["support_hashes"])):
             if filename not in hashes or not (root / filename).is_file():
                 errors.append("Required evidence companion is missing or not hash-bound: " + filename)
-            elif report.get("evidence_renderer") == "companion/v8":
-                expected = render_agent_package(article, packet, report["language"], trajectory_style, evidence_renderer="companion/v8")["evidence.md"]
+            elif report.get("evidence_renderer") in ("companion/v8", "companion/v9"):
+                expected = render_agent_package(article, packet, report["language"], trajectory_style, evidence_renderer=report["evidence_renderer"])["evidence.md"]
                 if (root / filename).read_bytes() != expected.encode("utf-8"):
                     errors.append("Evidence companion differs from the reviewed handoff: " + filename)
             elif (root / filename).read_text(encoding="utf-8") != render_agent_package(article, packet, report["language"], trajectory_style)["evidence.md"]:
@@ -276,7 +278,7 @@ def validate_story(directory):
     if human_policy.is_file():
         if "human-presentation.json" not in report["support_hashes"] or json.loads(human_policy.read_bytes()) != HUMAN_PRESENTATION:
             errors.append("Human presentation policy is missing or invalid")
-    elif report.get("evidence_renderer") in ("companion/v4", "companion/v5", "companion/v6", "companion/v7", "companion/v8"):
+    elif report.get("evidence_renderer") in ("companion/v4", "companion/v5", "companion/v6", "companion/v7", "companion/v8", "companion/v9"):
         errors.append("Human presentation policy is missing or invalid")
     if report.get("output_schema") in ("story-output/v4", "story-output/v5", "story-output/v6", "story-output/v7", "story-output/v8", "story-output/v9"):
         errors.extend(validate_agent_detail(article.get("agent_detail"), packet))

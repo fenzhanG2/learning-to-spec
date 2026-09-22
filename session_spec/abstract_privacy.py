@@ -14,6 +14,7 @@ from .storage import file_hash, unlinked_path, write_json as store_json
 
 
 PIPELINE = "abstract-then-redact/v1"
+READER_NAVIGATION = "selected-reader-companions/v1"
 
 
 def plain_path(path):
@@ -95,11 +96,14 @@ def prepare_abstract_review(source, home, review_directory, audience, selection,
     artifact.write_text("".join(json.dumps(event, ensure_ascii=False) + "\n" for event in surface), encoding="utf-8", newline="\n")
     manifest = {"schema": PIPELINE, "source_path": str(source), "source_sha256": metadata["source_sha256"],
                 "artifact_sha256": file_hash(artifact), "privacy_mode": privacy_mode, "preferences": selection,
+                "reader_navigation": READER_NAVIGATION,
                 "audience": audience, "story_report_sha256": file_hash(directory / "story/_support/story-report.json"),
                 "language": json.loads((directory / "story/_support/language.json").read_bytes())["language"],
                 "note": "Private abstraction precedes privacy review. Only selected reader surfaces, including Agent evidence, are reviewed for delivery."}
     if fast:
-        manifest["quality_profile"] = "bounded-source-review/v1"
+        from .fast_quality import SCHEMA
+
+        manifest["quality_profile"] = SCHEMA
     if file_hash(source) != manifest["source_sha256"]:
         raise ValueError("The session changed during abstraction; use a new snapshot")
     write_json(directory / "abstraction.json", manifest)
@@ -150,6 +154,8 @@ def load_abstract_review(directory, review=None, *, validate_parent=False):
     if review.get("pipeline") != PIPELINE or file_hash(manifest_path) != review.get("abstraction_sha256"):
         raise ValueError("Abstract-first privacy provenance changed or is missing")
     manifest = json.loads(manifest_path.read_bytes())
+    if manifest.get("reader_navigation") not in {None, READER_NAVIGATION}:
+        raise ValueError("Unknown reader navigation policy")
     artifact = plain_path(abstraction / "source/events.jsonl")
     if (manifest.get("schema") != PIPELINE or plain_path(review["source_path"]) != artifact
             or file_hash(artifact) != manifest.get("artifact_sha256") or review.get("source_sha256") != manifest["artifact_sha256"]
@@ -166,7 +172,9 @@ def load_abstract_review(directory, review=None, *, validate_parent=False):
     if original != abstract_surface(story, manifest["preferences"]):
         raise ValueError("Reviewed surfaces differ from the private abstracted documents")
     profile = manifest.get("quality_profile")
-    if profile not in {None, "bounded-source-review/v1"}:
+    from .fast_quality import LEGACY_SCHEMA, SCHEMA
+
+    if profile not in {None, LEGACY_SCHEMA, SCHEMA}:
         raise ValueError("Unknown abstraction quality profile")
     if profile:
         from .fast_quality import validate_quality_receipt
@@ -190,6 +198,8 @@ def load_abstract_review(directory, review=None, *, validate_parent=False):
 def render_surface(events, manifest, directory):
     from .story_pipeline import render_story
 
+    if manifest.get("reader_navigation") not in {None, READER_NAVIGATION}:
+        raise ValueError("Unknown reader navigation policy")
     names = filenames(manifest["preferences"]["readers"])
     expected = ({"human"} if "human-spec.html" in names else set()) | ({"agent", "evidence"} if "agent-spec.md" in names else set())
     if (not isinstance(events, list) or len(events) != 1 or events[0].get("type") != "artifact.abstracted"
@@ -213,7 +223,10 @@ def render_surface(events, manifest, directory):
         for name, value in human.items():
             write_json(support / (name + ".json"), value)
         write_json(support / "agent-presentation.json", PRESENTATION)
-        write_json(support / "human-presentation.json", HUMAN_PRESENTATION)
+        presentation = dict(HUMAN_PRESENTATION)
+        if manifest.get("reader_navigation") == READER_NAVIGATION:
+            presentation["agent_available"] = "agent" in surface
+        write_json(support / "human-presentation.json", presentation)
         write_json(support / "language.json", {"language": manifest["language"]})
         if "evidence" in surface:
             plain_path(support / "evidence-rendered.md").write_bytes(surface["evidence"].encode("utf-8"))

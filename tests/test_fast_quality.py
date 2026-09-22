@@ -11,7 +11,7 @@ from offline_provider import guard_offline_test
 from session_spec.backend import ModelResponseError
 from session_spec.delivery import deliver
 from session_spec.draft_recovery import create_recovery, recovery_snapshot
-from session_spec.fast_quality import CHECKS, CONTRACT, SCHEMA, DraftPrivacyBackend, FastQualityBackend, QualityReviewFailure, review_source_quality, validate_quality, validate_quality_receipt
+from session_spec.fast_quality import CHECKS, CONTRACT, LEGACY_SCHEMA, SCHEMA, DraftPrivacyBackend, FastQualityBackend, QualityReviewFailure, review_source_quality, selected_reader_text, validate_quality, validate_quality_receipt
 from session_spec.privacy_presentation import present_review
 from session_spec.reduction import scan_session, load_review
 from session_spec.reduction_semantic import semantic_review
@@ -19,7 +19,7 @@ from session_spec.storage import file_hash, write_json
 
 
 def quality():
-    return {"schema": SCHEMA, "verdict": "pass", "checked": [{"category": category, "note": "PATH remains unverified."} for category in CHECKS], "issues": []}
+    return {"schema": SCHEMA, "verdict": "pass", "checked": [{"category": category, "note": "PATH remains unverified."} for category in CHECKS], "attention": [], "issues": []}
 
 
 class Backend:
@@ -49,7 +49,7 @@ class FastQualityTests(unittest.TestCase):
         example = next(line for line in CONTRACT.splitlines() if line.startswith('{"quality":'))
         response = json.loads(example.rstrip('.'))
         self.assertEqual(set(response), {"quality"})
-        self.assertEqual(set(response["quality"]), {"schema", "verdict", "checked", "issues"})
+        self.assertEqual(set(response["quality"]), {"schema", "verdict", "checked", "attention", "issues"})
         self.assertEqual(response["quality"]["schema"], SCHEMA)
         self.assertIn("topics may overlap in time", CONTRACT)
         self.assertIn("PRIVATE, PRE-REDACTION", CONTRACT)
@@ -79,6 +79,120 @@ class FastQualityTests(unittest.TestCase):
         self.backend = Backend(response)
         return FastQualityBackend(self.backend, self.events, self.artifact, self.support / "story-report.json", self.support / "fast-quality.json")
 
+    def attention_fixture(self, readers=("human", "agent")):
+        self.events.append({"ref": "E000016", "type": "assistant.message", "origin": "root",
+                            "text": "Historical TestMain: if !available { print(\"skipping E2E tests\"); os.Exit(0) }; m.Run()"})
+        write_json(self.support / "input.json", self.events)
+        human = "Recorded tests can skip with exit zero; require non-skipped execution logs & counts."
+        agent = "Confirm actual non-skipped test execution: a green status alone is insufficient."
+        surface = {reader: ({} if reader == "human" else agent) for reader in readers}
+        surface["evidence"] = "Source-only excerpt: skipping E2E tests with os.Exit(0)."
+        self.artifact.write_text(json.dumps({"type": "artifact.abstracted", "data": surface}) + "\n", encoding="utf-8")
+        (self.support.parent / "human-spec.html").write_text(
+            '<html><head><script>SECRET_SCRIPT_ONLY</script></head><body><main><p>Recorded tests can '
+            '<em>skip</em> with exit zero; require non-skipped execution logs &amp;\n counts.</p>'
+            '<dialog><textarea>AGENT_DIALOG_ONLY</textarea></dialog><p hidden>HIDDEN_ONLY</p></main></body></html>', encoding="utf-8")
+        entry = {"ref": "E000016", "category": "acceptance_or_failure_condition", "disposition": "retained",
+                 "note": "The recorded zero-exit skip makes a non-skipped execution check necessary.",
+                 "coverage": [{"reader": reader, "quote": human if reader == "human" else agent} for reader in readers]}
+        checked = quality()
+        checked["attention"] = [entry]
+        return checked
+
+    def test_generic_five_check_pass_cannot_ignore_zero_exit_attention_or_exceed_budget(self):
+        self.attention_fixture()
+        wrapper = self.wrapper({"quality": quality()})
+        self.backend.calls.append({"label": "structural-repair"})
+        with self.assertRaisesRegex(QualityReviewFailure, "within the model-call budget"):
+            review_source_quality(wrapper, [])
+        self.assertEqual(len(self.backend.calls), 3)
+        self.assertEqual(len(wrapper.calls), 2)  # repair plus the single remaining review call
+        self.assertFalse((self.support / "fast-quality.json").exists())
+        self.assertIn('"ref": "E000016"', self.backend.prompts[0])
+        self.assertIn("os.Exit(0)", self.backend.prompts[0])
+        self.assertEqual(len(list((self.support / "fast-quality-attempts").glob("*.json"))), 1)
+
+    def test_material_missing_attention_fails_once_with_actual_source_support(self):
+        checked = self.attention_fixture()
+        checked["attention"][0].update(disposition="missing", coverage=[], note="The Agent draft does not retain the recorded skip boundary.")
+        checked.update(verdict="fail", issues=[{"reason": "Acceptance does not establish non-skipped execution.",
+                                                 "refs": ["E000016"], "quote": "skipping E2E tests"}])
+        wrapper = self.wrapper({"quality": checked})
+        with self.assertRaises(QualityReviewFailure):
+            review_source_quality(wrapper, [])
+        self.assertEqual(len(wrapper.calls), 1)
+        self.assertEqual(json.loads((self.support / "fast-quality.json").read_bytes())["result"]["verdict"], "fail")
+        checked["issues"] = [{"reason": "Unrelated PATH uncertainty.", "refs": ["E000001"], "quote": "it is unverified"}]
+        with self.assertRaisesRegex(ValueError, "source-grounded failing issue"):
+            validate_quality(checked, self.events)
+
+    def test_retained_attention_quotes_each_selected_reader_with_html_normalization(self):
+        checked = self.attention_fixture()
+        readers = selected_reader_text(self.artifact, self.support / "story-report.json")
+        self.assertNotIn("AGENT_DIALOG_ONLY", readers["human"])
+        self.assertNotIn("HIDDEN_ONLY", readers["human"])
+        self.assertNotIn("SECRET_SCRIPT_ONLY", readers["human"])
+        original = copy.deepcopy((checked, self.events))
+        self.assertEqual(validate_quality(checked, self.events, readers), checked)
+        for selected in ({"human": readers["human"]}, {"agent": readers["agent"]}):
+            subset = copy.deepcopy(checked)
+            subset["attention"][0]["coverage"] = [item for item in subset["attention"][0]["coverage"] if item["reader"] in selected]
+            self.assertEqual(validate_quality(subset, self.events, selected), subset)
+        self.assertEqual((checked, self.events), original)
+        wrapper = self.wrapper({"quality": checked})
+        self.assertEqual(wrapper.generate("synthetic", "test"), checked)
+        manifest = {"artifact_sha256": file_hash(self.artifact), "quality_review_sha256": file_hash(self.support / "fast-quality.json"), "quality_profile": SCHEMA}
+        validate_quality_receipt(self.root, manifest)
+
+    def test_evidence_or_hidden_companion_cannot_substitute_for_reader_prose(self):
+        checked = self.attention_fixture()
+        readers = selected_reader_text(self.artifact, self.support / "story-report.json")
+        for quote in ("Source-only excerpt: skipping E2E tests with os.Exit(0).", "AGENT_DIALOG_ONLY", "HIDDEN_ONLY", "Invented acceptance statement", "&nbsp;", "&#x20;"):
+            response = copy.deepcopy(checked)
+            response["attention"][0]["coverage"][0]["quote"] = quote
+            with self.subTest(quote=quote), self.assertRaisesRegex(ValueError, "actual selected-reader quotations"):
+                validate_quality(response, self.events, readers)
+        checked["attention"][0]["coverage"].pop()
+        with self.assertRaisesRegex(ValueError, "every selected reader"):
+            validate_quality(checked, self.events, readers)
+
+    def test_contextual_candidate_exclusion_requires_reason_but_not_invented_reader_content(self):
+        self.events.append({"ref": "E000002", "type": "assistant.message", "text": "Unrelated tutorial: the old no-op example is not the selected workflow."})
+        checked = quality()
+        checked["attention"] = [{"ref": "E000002", "category": "acceptance_or_failure_condition", "disposition": "not_material",
+                                  "note": "The complete event identifies a separate tutorial example, not behavior of the task's workflow.", "coverage": []}]
+        wrapper = self.wrapper({"quality": checked})
+        self.assertEqual(wrapper.generate("synthetic", "test"), checked)
+        for change in ({"note": ""}, {"ref": "E000003"}, {"coverage": [{"reader": "agent", "quote": "PATH remains unverified."}]}):
+            invalid = copy.deepcopy(checked)
+            invalid["attention"][0].update(change)
+            with self.subTest(change=change), self.assertRaises(ValueError):
+                validate_quality(invalid, self.events, {"agent": "PATH remains unverified."})
+
+    def test_all_distinct_attention_candidates_need_accounting_including_security_warning(self):
+        checked = self.attention_fixture()
+        self.events.append({"ref": "E000023", "type": "assistant.message", "text": "Historical warning: rotate the exposed test credential; remediation is unverified."})
+        checked["attention"].append(copy.deepcopy(checked["attention"][0]))
+        with self.assertRaisesRegex(ValueError, "Invalid source attention assessment"):
+            validate_quality(checked, self.events, selected_reader_text(self.artifact, self.support / "story-report.json"))
+
+    def test_legacy_receipts_remain_explicitly_legacy_but_new_review_rejects_old_schema(self):
+        self.attention_fixture()
+        legacy = quality()
+        legacy["schema"] = LEGACY_SCHEMA
+        legacy.pop("attention")
+        receipt = self.support / "fast-quality.json"
+        record = {"schema": LEGACY_SCHEMA, "result": legacy, "source_sha256": file_hash(self.support / "source.json"),
+                  "artifact_sha256": file_hash(self.artifact), "story_report_sha256": file_hash(self.support / "story-report.json")}
+        write_json(receipt, record)
+        manifest = {"artifact_sha256": file_hash(self.artifact), "quality_review_sha256": file_hash(receipt), "quality_profile": LEGACY_SCHEMA}
+        validate_quality_receipt(self.root, manifest)
+        with self.assertRaises(ValueError):
+            validate_quality(legacy, self.events)
+        manifest["quality_profile"] = SCHEMA
+        with self.assertRaisesRegex(ValueError, "receipt changed"):
+            validate_quality_receipt(self.root, manifest)
+
     def test_source_quality_and_privacy_receive_disjoint_inputs_and_response_schemas(self):
         directory = self.root / "review"
         scan_session(self.artifact, self.root / "home", directory, audience="local")
@@ -98,6 +212,7 @@ class FastQualityTests(unittest.TestCase):
         self.assertIn("ORIGINAL_ONLY_NOT_IN_DRAFT", self.backend.prompts[0])
         self.assertIn("SOURCE SLOTS", self.backend.prompts[1])
         self.assertNotIn("FULL_SOURCE_EVENTS", self.backend.prompts[1])
+        self.assertNotIn("SELECTED_READER_TEXT", self.backend.prompts[1])
         self.assertNotIn("ORIGINAL_ONLY_NOT_IN_DRAFT", self.backend.prompts[1])
         self.assertNotIn("QUALITY_OUTPUT_NOT_FOR_PRIVACY", self.backend.prompts[1])
         review, baseline = load_review(directory)
@@ -133,6 +248,8 @@ class FastQualityTests(unittest.TestCase):
         rejected = quality()
         rejected.update(verdict="fail", issues=[{"reason": "The cited question does not authorize the claimed blanket restriction.",
                                                   "refs": ["E000001"], "quote": "Is the matrix parallel?"}])
+        rejected["attention"] = [{"ref": "E000002", "category": "acceptance_or_failure_condition", "disposition": "not_material",
+                                  "note": "This related historical rejection is distinct from the unsupported human attribution identified in the issue.", "coverage": []}]
         wrapper = self.wrapper({"quality": rejected})
         with self.assertRaises(QualityReviewFailure):
             review_source_quality(wrapper, surface)
@@ -221,7 +338,7 @@ class FastQualityTests(unittest.TestCase):
         response = {"quality": quality()}
         wrapper = self.wrapper(response)
 
-        def rejected(result, events):
+        def rejected(result, events, readers):
             attempts = list((self.support / "fast-quality-attempts").glob("*.json"))
             self.assertEqual(len(attempts), 1)
             self.assertEqual(json.loads(attempts[0].read_bytes())["response"], response)

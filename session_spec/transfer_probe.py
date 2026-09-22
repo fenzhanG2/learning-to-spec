@@ -115,7 +115,7 @@ def validate_record(record, events):
             or not isinstance(documents, dict) or set(documents) != {"agent-spec.md", "evidence.md"}
             or any(not isinstance(value, str) for value in documents.values())):
         return ["Transfer probe source or delivered-pair binding is invalid"]
-    if (not isinstance(identity.get("renderer"), str) or identity["renderer"] not in {"companion/v5", "companion/v6", "companion/v7", "companion/v8"}
+    if (not isinstance(identity.get("renderer"), str) or identity["renderer"] not in {"companion/v5", "companion/v6", "companion/v7", "companion/v8", "companion/v9"}
             or any(not isinstance(identity.get(key), str)
             or not re.fullmatch(r"[a-f0-9]{64}", identity[key]) for key in ("candidate_sha256", "contract_sha256"))):
         return ["Transfer probe candidate or contract binding is invalid"]
@@ -129,7 +129,7 @@ def validate_record(record, events):
 def final_pair_matches(record, edition, events, language="auto", documents=None):
     if documents is None:
         renderer = record.get("identity", {}).get("renderer")
-        if not isinstance(renderer, str) or renderer not in {"companion/v5", "companion/v6", "companion/v7", "companion/v8"}:
+        if not isinstance(renderer, str) or renderer not in {"companion/v5", "companion/v6", "companion/v7", "companion/v8", "companion/v9"}:
             return False
         documents = render_agent_package(edition["article"], events, resolve_language(events, language)["language"], evidence_renderer=renderer)
     return record.get("identity", {}).get("documents") == {

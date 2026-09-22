@@ -343,7 +343,7 @@ def validate_fast_story(directory):
         support = plain_path(directory / "_support")
         report = json.loads(plain_path(support / "story-report.json").read_bytes())
         if (report.get("schema") != SCHEMA or report.get("profile") != PROFILE or report.get("status") != STATUS
-                or report.get("semantic_review") != "pending" or report.get("evidence_renderer") != EVIDENCE_RENDERER
+                or report.get("semantic_review") != "pending" or report.get("evidence_renderer") not in ("companion/v8", "companion/v9")
                 or set(report.get("hashes", {})) != OUTPUT_FILES or set(report.get("support_hashes", {})) != SUPPORT_FILES):
             raise ValueError("Invalid fast-story structural-only publication policy")
         for root, hashes in ((directory, report["hashes"]), (support, report["support_hashes"])):
@@ -365,7 +365,7 @@ def validate_fast_story(directory):
                 or identity.get("canonical_evidence_sha256") != digest(evidence_bytes)
                 or identity.get("input_sha256") != digest(json.dumps(packet, ensure_ascii=False, separators=(",", ":")).encode())
                 or identity.get("contract_sha256") != file_hash(support / "fast-contract.md")
-                or identity.get("evidence_renderer") != EVIDENCE_RENDERER or receipt.get("identity") != identity
+                or identity.get("evidence_renderer") != report["evidence_renderer"] or receipt.get("identity") != identity
                 or receipt.get("schema") != SCHEMA or receipt.get("status") != STATUS or receipt.get("semantic_review") != "pending"
                 or receipt.get("max_generation_calls") != 2 or not 1 <= len(receipt.get("attempts", [])) <= 2
                 or len(receipt.get("calls", [])) != len(receipt["attempts"])):
@@ -398,7 +398,7 @@ def validate_fast_story(directory):
                 or json.loads((support / "tool-ledger.json").read_bytes()) != tool_ledger(packet)):
             raise ValueError("Fast-story presentation or tool ledger changed")
         with content_redaction(False):
-            outputs = render_agent_package(edition["article"], packet, report["language"], evidence_renderer=EVIDENCE_RENDERER)
+            outputs = render_agent_package(edition["article"], packet, report["language"], evidence_renderer=report["evidence_renderer"])
             for name, text in outputs.items():
                 alias = "agent-rendered.md" if name == "agent-spec.md" else "evidence-rendered.md"
                 if (directory / name).read_bytes() != text.encode("utf-8") or (support / alias).read_bytes() != text.encode("utf-8"):

@@ -5,12 +5,13 @@ from .storage import write_json
 
 LEGACY_PRESENTATION = {"schema": "agent-presentation/v1", "evidence_substitution": "literal"}
 PRESENTATION = {"schema": "agent-presentation/v2", "mode": "markdown-files"}
-EVIDENCE_RENDERER = "companion/v8"
+EVIDENCE_RENDERER = "companion/v9"
 HUMAN_PRESENTATION = {"schema": "human-presentation/v1", "source_heading": "neutral"}
 COMPANION_STYLES = {"companion/v1": "handoff-split", "companion/v2": "handoff-split",
                     "companion/v3": "handoff-portable", "companion/v4": "handoff-portable-v2",
                     "companion/v5": "handoff-portable-v3", "companion/v6": "handoff-portable-v4",
-                    "companion/v7": "handoff-portable-v5", "companion/v8": "handoff-portable-v5"}
+                    "companion/v7": "handoff-portable-v5", "companion/v8": "handoff-portable-v5",
+                    "companion/v9": "handoff-portable-v6"}
 
 
 def render_agent_package(article, events, language, trajectory_style=None, *, evidence_renderer=None):
@@ -25,13 +26,13 @@ def render_agent_package(article, events, language, trajectory_style=None, *, ev
         trajectory_style = expected_style
     markdown = render_agent(article, events, language, trajectory_style)
     files = {"agent-spec.md": markdown}
-    complete_short = trajectory_style in {"handoff-portable-v3", "handoff-portable-v4", "handoff-portable-v5"} or trajectory_style is None and article.get("agent_detail", {}).get("schema") == "agent-detail/v3"
+    complete_short = trajectory_style in {"handoff-portable-v3", "handoff-portable-v4", "handoff-portable-v5", "handoff-portable-v6"} or trajectory_style is None and article.get("agent_detail", {}).get("schema") == "agent-detail/v3"
     payload_aware = trajectory_style == "handoff-portable-v2" or complete_short
     portable = trajectory_style == "handoff-portable" or payload_aware
     separate = trajectory_style == "handoff-split" or portable
     if separate:
         files["evidence.md"] = EvidenceIndex(events, tool_ledger(events), language, portable=portable, payload_aware=payload_aware,
-                                             complete_short=complete_short, complete_payloads=evidence_renderer == "companion/v8").companion(markdown)
+                                             complete_short=complete_short, complete_payloads=evidence_renderer in {"companion/v8", "companion/v9"}).companion(markdown)
     return files
 
 

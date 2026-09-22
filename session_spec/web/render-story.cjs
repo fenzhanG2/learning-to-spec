@@ -14,14 +14,16 @@ if (!markdownFiles && fs.existsSync(path.join(input, 'agent-rendered.md'))) arti
 const presentationPath = path.join(input, 'presentation.json');
 const humanPresentation = fs.existsSync(path.join(input, 'human-presentation.json')) ? read('human-presentation.json') : null;
 if (humanPresentation && (humanPresentation.schema !== 'human-presentation/v1' || humanPresentation.source_heading !== 'neutral')) throw new Error('Unknown Human presentation policy');
+if (humanPresentation?.agent_available !== undefined && typeof humanPresentation.agent_available !== 'boolean') throw new Error('Unknown Agent availability');
+const hasAgent = humanPresentation?.agent_available !== false;
 const presentation = fs.existsSync(presentationPath) ? read('presentation.json') : { category: translate(humanPresentation ? '工程会话记录' : '一段真实的技术工作'), routeIcons: ['Compass', 'Route', 'Workflow', 'PackageCheck', 'Flag'] };
 presentation.language = language;
 const brief = fs.existsSync(path.join(input, 'brief.json')) ? read('brief.json') : undefined;
 const evidencePath = path.join(input, 'evidence-rendered.md');
-const html = renderArticle(article, presentation, '#', '#story-takeaway', translate('回看这次留下的认识'), read('insights.json'), brief, markdownFiles, fs.existsSync(evidencePath))
+const html = renderArticle(article, presentation, '#', '#story-takeaway', translate('回看这次留下的认识'), read('insights.json'), brief, markdownFiles, fs.existsSync(evidencePath), hasAgent)
   .replace('<a href="#">两篇故事</a>', '')
   .replace('>这篇故事</h2>', '>阅读路线</h2>');
-if (markdownFiles) {
+if (markdownFiles || !hasAgent) {
   fs.writeFileSync(output, html);
 } else {
   const { enhanceAgent } = require('./agent-preview.cjs');

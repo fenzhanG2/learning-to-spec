@@ -21,17 +21,17 @@ from test_story_pipeline import FakeBackend, article, brief, edition_review, ins
 @unittest.skipUnless(shutil.which("node"), "Node.js required for HTML rendering")
 class StoryRefreshTests(unittest.TestCase):
     def test_complete_and_legacy_published_pairs_validate_without_rebinding(self):
-        for renderer in ("companion/v5", "companion/v6", "companion/v7", "companion/v8"):
+        for renderer in ("companion/v5", "companion/v6", "companion/v7", "companion/v8", "companion/v9"):
             with self.subTest(renderer=renderer), tempfile.TemporaryDirectory() as temporary:
                 events = packet()
                 events[1]["result"]["content"] += "\r\n" + "prefix " * 1000 + "MIDDLE_PAYLOAD" + " suffix" * 1000
-                if renderer == "companion/v8":
+                if renderer in ("companion/v8", "companion/v9"):
                     events[0]["human_input"] += "\r\nObservable fixture continuation."
                     events[0]["text"] = events[0]["human_input"]
                 output = self.make_story(Path(temporary), final_reader=True, renderer=renderer, events=events)
                 self.assertTrue(validate_story(output)["valid"])
                 evidence = (output / "evidence.md").read_bytes()
-                if renderer == "companion/v8":
+                if renderer in ("companion/v8", "companion/v9"):
                     self.assertIn(payload_text(source_payload(events[1])).encode(), evidence)
                     self.assertIn(events[0]["human_input"].encode(), evidence)
                     self.assertIn(b"\r\n", evidence)
@@ -40,7 +40,7 @@ class StoryRefreshTests(unittest.TestCase):
                 report = json.loads((output / "_support/story-report.json").read_bytes())
                 self.assertEqual(report["evidence_renderer"], renderer)
 
-    def test_v8_requires_bound_final_probe_and_preserves_refresh_bytes(self):
+    def test_current_requires_bound_final_probe_and_preserves_refresh_bytes(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             output = self.make_story(root, final_reader=True)
@@ -59,7 +59,7 @@ class StoryRefreshTests(unittest.TestCase):
                 write_json(receipt_path, receipt)
                 report["support_hashes"]["edition-receipt.json"] = file_hash(receipt_path)
                 write_json(report_path, report)
-                self.assertIn("v8 final-pair probe binding", str(validate_story(output)["issues"]))
+                self.assertIn(EVIDENCE_RENDERER + " final-pair probe binding", str(validate_story(output)["issues"]))
                 receipt["identity"][field] = original
 
     def legacy_companion_files(self, output):
