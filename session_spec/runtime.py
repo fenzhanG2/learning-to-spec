@@ -140,7 +140,7 @@ class DurableStudio(Studio):
             result["next_action"] = "Inspect selected deliverables locally. Publication requires final-file and destination approval in the Studio."
         if job["status"] == "done" and job["stage"] in {"publish", "verify"}:
             receipt = job.get("result", {})
-            result["publication"] = {key: receipt[key] for key in ("status", "url", "files") if key in receipt}
+            result["publication"] = {key: receipt[key] for key in ("status", "url", "files", "plan_id", "package_id", "site", "quality", "privacy", "risk_override", "verification_scope") if key in receipt}
         return result
 
     def delivered(self, identifier):

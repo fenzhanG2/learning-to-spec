@@ -1,17 +1,15 @@
 {
   "name": "learning-to-spec",
-  "version": "0.6.11",
-  "description": "Export local Copilot sessions into human and agent work specs using Copilot CLI.",
+  "version": "0.7.0",
+  "description": "Compatibility metadata only. Native /to-spec export runs in GitHub Copilot, not Codex.",
   "author": {"name": "Local"},
-  "skills": "./skills/",
-  "mcpServers": "./.mcp.json",
   "interface": {
-    "displayName": "Learning to Spec",
-    "shortDescription": "Session trajectory, results and next-run instructions",
-    "longDescription": "Read local Copilot events, preserve observable trajectory and decisions, and produce human and agent work specs from one evidence-linked canonical document.",
+    "displayName": "Learning to Spec (Copilot only)",
+    "shortDescription": "Native export requires GitHub Copilot",
+    "longDescription": "This compatibility manifest registers no tools or skills. Install the native extension in GitHub Copilot and use /to-spec there. Historical integration examples remain under docs/legacy and are not automatically registered.",
     "developerName": "Local",
     "category": "Productivity",
-    "capabilities": ["Interactive", "Read", "Write"],
-    "defaultPrompt": ["Export a Copilot session into human and agent work specs."]
+    "capabilities": [],
+    "defaultPrompt": []
   }
 }

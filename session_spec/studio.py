@@ -15,8 +15,9 @@ from pathlib import Path
 from .artifacts import ArtifactClient, destination_plan, publish_package
 from .ingest import list_sessions, resolve_session
 from .private_cli import generate_private
-from .reduction import at_path, digest, load_review, scan_session, strings, suggested_action, transform
+from .reduction import digest, load_review, scan_session, transform, prepare_full_session
 from .reduction_semantic import semantic_review
+from .privacy_presentation import present_review
 from .share_package import approve_package, load_package, prepare_package
 from .story_pipeline import validate_story
 from .delivery import filenames, preferences, validate_delivery
@@ -110,6 +111,20 @@ class Studio:
             raise ValueError("Unknown job in this studio session")
         return self.jobs[identifier]
 
+    def delivery_snapshot(self, job):
+        if "generation" not in job or job["status"] == "running":
+            raise ValueError("Only completed deliverable files are available")
+        generation = Path(job["generation"]).resolve()
+        review, baseline = load_review(job.get("review_directory", job["directory"] / "review"))
+        if job.get("approved_choices") and job.get("decision_id") != digest(job["approved_choices"]):
+            raise ValueError("Privacy choices changed; regenerate before downloading")
+        selection = review.get("preferences", {})
+        manifest = validate_delivery(generation, selection)
+        if manifest.get("review_id") != review["review_id"]:
+            raise ValueError("Delivery review identity changed")
+        identity = digest({"generation": str(generation), "decision_id": job.get("decision_id"), "manifest": manifest})
+        return generation, {"id": identity, "files": {**manifest["files"], "deliverables.zip": manifest["archive_sha256"]}}
+
     def action(self, path, data):
         with self.action_lock:
             if getattr(self, "closing", False):
@@ -127,10 +142,18 @@ class Studio:
             return {"teams": result.get("teams", []) if isinstance(result, dict) else result}
         if path == "/api/scan":
             selection = preferences(data.get("readers"), data.get("delivery"), data.get("audience"))
-            if data.get("detection") not in {"local", "copilot"}:
+            privacy_mode = data.get("privacy_mode")
+            if privacy_mode not in {None, "full", "llm"}:
+                raise ValueError("Choose no redaction or smart redaction")
+            if privacy_mode == "full":
+                if data.get("detection") != "none" or data.get("semantic") is not False:
+                    raise ValueError("No-redaction mode must explicitly skip privacy scanning")
+            elif data.get("detection") not in {"local", "copilot"}:
                 raise ValueError("Explicitly choose local detection or a contextual Copilot review")
             if (data.get("detection") == "copilot") != (data.get("semantic") is True):
                 raise ValueError("Contextual Copilot review requires separate disclosure consent")
+            if privacy_mode == "llm" and data.get("semantic") is not True:
+                raise ValueError("Smart redaction requires both local rules and Copilot review")
             source = next((item for item in self.sessions if item["id"] == data.get("session")), None)
             if not source:
                 raise ValueError("Select one of the listed sessions")
@@ -140,8 +163,12 @@ class Studio:
             self.jobs[identifier] = job
 
             def scan():
-                review = scan_session(source["path"], self.home, job["directory"] / "review", audience=data.get("audience", "local"),
-                                      purpose=data.get("purpose", "Technical story and actionable Agent handoff"), custom=data.get("custom", []), preferences=selection)
+                if privacy_mode == "full":
+                    review = prepare_full_session(source["path"], self.home, job["directory"] / "review", data["audience"], selection)
+                else:
+                    review = scan_session(source["path"], self.home, job["directory"] / "review", audience=data.get("audience", "local"),
+                                          purpose=data.get("purpose", "Technical story and actionable Agent handoff"), custom=data.get("custom", []),
+                                          preferences=selection, privacy_mode=privacy_mode)
                 if data.get("semantic") is True:
                     review = semantic_review(job["directory"] / "review", consent=True, **self.settings)
                 return {"findings": len(review["findings"]), "review_id": review["review_id"]}
@@ -232,7 +259,8 @@ class Studio:
             if data.get("confirm") != job["plan"].get("plan_id"):
                 raise ValueError("Destination changed; inspect the current destination before uploading")
             if data.get("publish_intent") is True:
-                approve_package(job["package"], data.get("package_id"), data.get("acknowledged", []), confirmed_publish=True)
+                approve_package(job["package"], data.get("package_id"), data.get("acknowledged", []), confirmed_publish=True,
+                                accept_unvalidated=data.get("accept_unvalidated") is True)
             return self.background(job, "publish", lambda: publish_package(job["package"], job["plan"], data.get("confirm"), ArtifactClient()))
         raise ValueError("Unknown studio action")
 
@@ -242,11 +270,13 @@ def handler_for(studio):
         def log_message(self, format_string, *arguments):
             return
 
-        def send(self, status, body, content_type="application/json; charset=utf-8"):
+        def send(self, status, body, content_type="application/json; charset=utf-8", snapshot=None):
             payload = body if isinstance(body, bytes) else json.dumps(body, ensure_ascii=False).encode("utf-8")
             self.send_response(status)
             self.send_header("Content-Type", content_type)
             self.send_header("Content-Length", str(len(payload)))
+            if snapshot is not None:
+                self.send_header("X-Delivery-Snapshot", snapshot)
             self.send_header("Cache-Control", "no-store")
             self.send_header("X-Content-Type-Options", "nosniff")
             self.send_header("Referrer-Policy", "no-referrer")
@@ -291,39 +321,26 @@ def handler_for(studio):
                         result["publication_attempted"] = "package" in job and (job["package"] / "publication.json").exists()
                         if "delivery_result" not in result and job["stage"] == "generate" and job["status"] == "done":
                             result["delivery_result"] = copy.deepcopy(job.get("result"))
+                        if result.get("delivery_result") and job["status"] != "running":
+                            generation, snapshot = studio.delivery_snapshot(job)
+                            result["delivery_result"]["snapshot"] = snapshot
                     self.send(200, result)
                 elif parsed.path == "/api/review":
                     review, baseline = load_review(job.get("review_directory", job["directory"] / "review"))
-                    slots = {f"S{number}": (path, text) for number, (path, text) in enumerate(strings(baseline), 1)}
-                    for finding in review["findings"]:
-                        finding["recommended"] = suggested_action(finding)
-                        finding["contexts"] = []
-                        for occurrence in finding["occurrences"][:3]:
-                            text = at_path(baseline, occurrence["path"])
-                            finding["contexts"].append(text[max(0, occurrence["start"] - 160):occurrence["end"] + 160])
-                        finding["related_contexts"] = []
-                        for identifier in finding.get("related", []):
-                            if identifier in slots:
-                                path, text = slots[identifier]
-                                finding["related_contexts"].append({"event": path[0] + 1, "field": list(path[1:]), "text": text})
-                    self.send(200, review)
+                    self.send(200, present_review(review, baseline))
                 elif parsed.path == "/api/file":
                     name = query.get("name", [""])[0]
-                    if "generation" not in job or job["status"] == "running":
-                        raise ValueError("Only completed deliverable files are available")
-                    review, baseline = load_review(job.get("review_directory", job["directory"] / "review"))
-                    selection = review.get("preferences", {})
-                    if job.get("approved_choices") and job.get("decision_id") != digest(job["approved_choices"]):
-                        raise ValueError("Privacy choices changed; regenerate before downloading")
-                    if name not in [*filenames(selection.get("readers")), "deliverables.zip"]:
-                        raise ValueError("This file was not selected for delivery")
-                    manifest = validate_delivery(job["generation"], selection)
-                    target = job["generation"] / name if name == "deliverables.zip" else job["generation"] / "deliverables" / name
-                    content = target.read_bytes()
-                    expected = manifest["archive_sha256"] if name == "deliverables.zip" else manifest["files"][name]
-                    if hashlib.sha256(content).hexdigest() != expected:
-                        raise ValueError("Delivery changed while reading")
-                    self.send(200, content, "application/zip" if name == "deliverables.zip" else "text/plain; charset=utf-8")
+                    with studio.action_lock, studio.lock:
+                        generation, snapshot = studio.delivery_snapshot(job)
+                        if self.headers.get("X-Delivery-Snapshot") != snapshot["id"]:
+                            raise ValueError("Delivery snapshot changed or missing; reopen the completed output")
+                        if name not in snapshot["files"]:
+                            raise ValueError("This file was not selected for delivery")
+                        target = generation / name if name == "deliverables.zip" else generation / "deliverables" / name
+                        content = target.read_bytes()
+                        if hashlib.sha256(content).hexdigest() != snapshot["files"][name]:
+                            raise ValueError("Delivery changed while reading")
+                    self.send(200, content, "application/zip" if name == "deliverables.zip" else "text/plain; charset=utf-8", snapshot["id"])
                 else:
                     self.send(404, {"error": "Not found"})
             except (ValueError, OSError, KeyError) as error:

@@ -13,7 +13,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from session_spec.studio import Studio, handler_for
-from session_spec.delivery import deliver
+from session_spec.delivery import deliver, validate_delivery
 
 
 class StudioTests(unittest.TestCase):
@@ -156,6 +156,22 @@ class StudioTests(unittest.TestCase):
         status, _, _ = self.request("/api/scan", {**headers, "Content-Type": "text/plain"}, b"{}")
         self.assertEqual(status, 400)
 
+    def test_review_endpoint_does_not_send_unverified_model_conclusions_or_rewrites(self):
+        self.studio.jobs["test"] = {"id": "test", "status": "done", "directory": self.root}
+        review = {"review_id": "synthetic-review", "findings": [{
+            "id": "Psynthetic", "category": "inference", "text": "Exact synthetic source", "label": "PRIVATE_MODEL_GUESS",
+            "reason": "PRIVATE_MODEL_GUESS", "alternative": "PRIVATE_MODEL_REWRITE", "necessity": "uncertain",
+            "recommended": None, "detectors": ["copilot"], "occurrences": [], "assessments": [{"reason": "PRIVATE_MODEL_GUESS"}],
+        }]}
+        with patch("session_spec.studio.load_review", return_value=(review, [])):
+            status, _, body = self.request("/api/review?job=test", {"Authorization": "Bearer " + self.studio.token})
+        self.assertEqual(status, 200)
+        self.assertNotIn(b"PRIVATE_MODEL_", body)
+        returned = json.loads(body)
+        self.assertEqual(returned["review_id"], "synthetic-review")
+        self.assertEqual(returned["findings"][0]["text"], "Exact synthetic source")
+        self.assertEqual(review["findings"][0]["reason"], "PRIVATE_MODEL_GUESS")
+
     def test_open_local_is_allowlisted_and_requires_finished_output(self):
         generation = self.root / "generation"
         (generation / "story").mkdir(parents=True)
@@ -210,15 +226,75 @@ class StudioTests(unittest.TestCase):
         apply_review(self.root / "review", recommended_decisions(review), generation / "reduced")
         (generation / "story").mkdir()
         (generation / "story/human-spec.html").write_text("<h1>Human only</h1>")
-        deliver(generation, selection)
-        self.studio.jobs["test"] = {"id": "test", "status": "done", "generation": generation, "directory": self.root}
+        result = deliver(generation, selection)
+        self.studio.jobs["test"] = {"id": "test", "stage": "generate", "status": "done", "generation": generation, "directory": self.root, "result": result}
         headers = {"Authorization": "Bearer " + self.studio.token}
+        status, _, body = self.request("/api/status?job=test", headers)
+        self.assertEqual(status, 200)
+        headers["X-Delivery-Snapshot"] = json.loads(body)["delivery_result"]["snapshot"]["id"]
         self.assertEqual(self.request("/api/file?job=test&name=human-spec.html", headers)[0], 200)
         self.assertEqual(self.request("/api/file?job=test&name=deliverables.zip", headers)[0], 200)
         for name in ("agent-spec.md", "evidence.md", "../../review.json"):
             self.assertEqual(self.request("/api/file?job=test&name=" + name, headers)[0], 400)
         with self.assertRaisesRegex(ValueError, "local files"):
             self.studio.action("/api/package", {"job": "test"})
+
+    def test_snapshot_refuses_external_same_job_generation_change_and_missing_binding(self):
+        selection = {"readers": "agent", "destination": "local"}
+        review = scan_session(self.studio.sessions[0]["path"], self.root / "home", self.root / "review", preferences=selection)
+        generations = []
+        for label in ("first", "second"):
+            generation = self.root / label
+            apply_review(self.root / "review", recommended_decisions(review), generation / "reduced")
+            (generation / "story").mkdir()
+            for name in ("agent-spec.md", "evidence.md"):
+                (generation / "story" / name).write_text(label + name)
+            generations.append((generation, deliver(generation, selection)))
+        job = {"id": "test", "stage": "generate", "status": "done", "generation": generations[0][0], "directory": self.root, "result": generations[0][1]}
+        self.studio.jobs["test"] = job
+        headers = {"Authorization": "Bearer " + self.studio.token}
+        self.assertEqual(self.request("/api/file?job=test&name=agent-spec.md", headers)[0], 400)
+        status, _, body = self.request("/api/status?job=test", headers)
+        self.assertEqual(status, 200)
+        old = json.loads(body)["delivery_result"]["snapshot"]
+        headers["X-Delivery-Snapshot"] = old["id"]
+        self.assertEqual(self.request("/api/file?job=test&name=agent-spec.md", headers)[2], b"firstagent-spec.md")
+        with self.studio.action_lock, self.studio.lock:
+            job.update(generation=generations[1][0], result=generations[1][1])
+        for name in ("evidence.md", "deliverables.zip"):
+            self.assertEqual(self.request("/api/file?job=test&name=" + name, headers)[0], 400)
+        status, _, body = self.request("/api/status?job=test", headers)
+        current = json.loads(body)["delivery_result"]["snapshot"]
+        self.assertNotEqual(current["id"], old["id"])
+        headers["X-Delivery-Snapshot"] = current["id"]
+        status, response_headers, body = self.request("/api/file?job=test&name=evidence.md", headers)
+        self.assertEqual((status, body), (200, b"secondevidence.md"))
+        self.assertEqual(response_headers["X-Delivery-Snapshot"], current["id"])
+
+        entered, release, switch_started = threading.Event(), threading.Event(), threading.Event()
+
+        def held_validation(*arguments):
+            manifest = validate_delivery(*arguments)
+            entered.set()
+            release.wait(5)
+            return manifest
+
+        def switch_generation():
+            switch_started.set()
+            with self.studio.action_lock, self.studio.lock:
+                job.update(generation=generations[0][0], result=generations[0][1])
+
+        with patch("session_spec.studio.validate_delivery", side_effect=held_validation), ThreadPoolExecutor(max_workers=2) as executor:
+            reading = executor.submit(self.request, "/api/file?job=test&name=evidence.md", headers)
+            self.assertTrue(entered.wait(5))
+            switching = executor.submit(switch_generation)
+            try:
+                self.assertTrue(switch_started.wait(5))
+                self.assertFalse(switching.done())
+            finally:
+                release.set()
+            self.assertEqual(reading.result(timeout=5)[2], b"secondevidence.md")
+            switching.result(timeout=5)
 
 
 if __name__ == "__main__":

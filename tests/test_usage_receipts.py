@@ -114,6 +114,7 @@ class UsageReceiptTests(unittest.TestCase):
         with patch("session_spec.backend.find_copilot", return_value="synthetic"), \
              patch("session_spec.backend.auth_environment", return_value={"COPILOT_GITHUB_TOKEN": "synthetic"}), \
              patch("session_spec.backend.subprocess.Popen", return_value=Process()), \
+             patch("session_spec.backend.os.killpg", create=True), \
              patch("session_spec.backend.subprocess.run", return_value=subprocess.CompletedProcess([], 0)):
             backend = CopilotBackend(timeout=1)
             with self.assertRaisesRegex(ValueError, "cleanup was not confirmed"):
@@ -159,6 +160,7 @@ class UsageReceiptTests(unittest.TestCase):
              patch("session_spec.backend.auth_environment", return_value={"COPILOT_GITHUB_TOKEN": "synthetic"}), \
              patch("session_spec.backend.subprocess.Popen", return_value=Process()), \
              patch("session_spec.backend.subprocess.run", return_value=subprocess.CompletedProcess([], 0)), \
+             patch("session_spec.backend.os.killpg", create=True), \
              patch("session_spec.backend.isolated_usage", return_value=[{"totalApiDurationMs": 1}]) as usage:
             backend = CopilotBackend(timeout=1)
             with self.assertRaisesRegex(ValueError, "timed out"):

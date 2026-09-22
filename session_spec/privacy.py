@@ -1,5 +1,25 @@
 import json
 import re
+from contextlib import contextmanager
+from contextvars import ContextVar
+
+
+_CONTENT_REDACTION = ContextVar("content_redaction", default=True)
+
+
+def redaction_enabled():
+    return _CONTENT_REDACTION.get()
+
+
+@contextmanager
+def content_redaction(enabled=True):
+    if not isinstance(enabled, bool):
+        raise ValueError("Explicit content redaction mode required")
+    token = _CONTENT_REDACTION.set(enabled)
+    try:
+        yield
+    finally:
+        _CONTENT_REDACTION.reset(token)
 
 
 HIDDEN_FIELDS = {
@@ -26,9 +46,13 @@ SECRET_PATTERNS = [
 ]
 
 
-def redact_text(value):
+def visible_text(value):
     text = str(value or "")
-    text = re.sub(r'"(?:reasoningText|reasoningOpaque|encryptedContent|thinking|reasoning_content)"\s*:\s*"(?:\\.|[^"\\])*"', '"hidden_field_omitted": true', text)
+    return re.sub(r'"(?:reasoningText|reasoningOpaque|encryptedContent|thinking|reasoning_content)"\s*:\s*"(?:\\.|[^"\\])*"', '"hidden_field_omitted": true', text)
+
+
+def redact_text(value):
+    text = visible_text(value)
     for pattern in SECRET_PATTERNS:
         text = pattern.sub("[REDACTED]", text)
     return text
@@ -37,13 +61,13 @@ def redact_text(value):
 def sanitize(value):
     if isinstance(value, dict):
         return {
-            str(key): "[REDACTED]" if SECRET_FIELD.fullmatch(str(key)) else sanitize(content)
+            str(key): "[REDACTED]" if redaction_enabled() and SECRET_FIELD.fullmatch(str(key)) else sanitize(content)
             for key, content in value.items() if key not in HIDDEN_FIELDS
         }
     if isinstance(value, list):
         return [sanitize(content) for content in value]
     if isinstance(value, str):
-        return redact_text(value)
+        return redact_text(value) if redaction_enabled() else visible_text(value)
     return value
 
 
@@ -51,7 +75,7 @@ def text_of(value):
     if value is None:
         return ""
     if isinstance(value, str):
-        return redact_text(value)
+        return sanitize(value)
     return json.dumps(sanitize(value), ensure_ascii=False)
 
 

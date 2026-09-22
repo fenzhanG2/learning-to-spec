@@ -34,6 +34,8 @@ jobs:
         run: node --check session_spec/web/studio.js
       - name: Install build-only dependencies
         run: npm ci --ignore-scripts --registry=https://registry.npmjs.org
+      - name: Test native extension workflow and read-only output panel
+        run: node --test tests/native_extension.mjs tests/native_model_selection.mjs tests/native_output.cjs tests/native_bridge_integration.mjs
       - name: Test source modules with their build dependencies
         run: python -X utf8 -m unittest discover -s tests -v
       - name: Verify reproducible renderer

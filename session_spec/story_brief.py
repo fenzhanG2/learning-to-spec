@@ -10,54 +10,58 @@ SCHEMA = "story-brief/v1"
 FIELDS = ("background", "problem", "goals", "approach", "non_goals", "scope", "constraints", "status")
 MAX_TEXT_CHARS = 300
 MAX_BRIEF_CHARS = 1400
+CONSTRAINT_KINDS = ("requirement", "environment")
 
 
 def validate_brief(value, events):
     if not isinstance(value, dict):
-        return ["Expected an opening brief object"]
+        return ["/brief: expected an opening brief object with schema story-brief/v1"]
     errors = []
     evidence = {event["ref"]: event for event in events}
     if value.get("schema") != SCHEMA or set(value) != {"schema", *FIELDS}:
-        errors.append("Unsupported opening brief schema or fields")
+        errors.append("/brief: expected schema story-brief/v1 and exactly keys " + json.dumps(["schema", *FIELDS]) + "; no extra keys")
     visible = []
 
     def statement(item, location, human=False, exclusion=False, constraint=False):
-        if not isinstance(item, dict):
-            errors.append("Invalid brief statement: " + location)
-            return
+        pointer = "/brief/" + location
         expected = {"text", "refs"} | ({"quote"} if exclusion else set()) | ({"kind"} if constraint else set())
+        shape = "expected an object with exactly keys " + json.dumps(sorted(expected)) + "; no extra keys"
+        if not isinstance(item, dict):
+            errors.append(pointer + ": " + shape)
+            return
         if set(item) != expected:
-            errors.append("Invalid brief statement fields: " + location)
+            errors.append(pointer + ": " + shape)
         content = item.get("text")
         if isinstance(content, str):
             visible.append(content)
         if not isinstance(content, str) or not content.strip() or len(content) > MAX_TEXT_CHARS:
-            errors.append("Missing or oversized brief text: /brief/" + location + f"/text; limit={MAX_TEXT_CHARS} characters, actual=" + str(len(content) if isinstance(content, str) else None))
+            errors.append(pointer + f"/text: expected nonempty text; limit={MAX_TEXT_CHARS} characters, actual=" + str(len(content) if isinstance(content, str) else None))
         elif re.search(r"\bE\d{6}\b|<[^>]+>|\]\([^)]*\)", content):
-            errors.append("Visible brief contains evidence IDs, markup or links: " + location)
+            errors.append(pointer + "/text: visible brief must not contain evidence IDs, markup or links; keep evidence in refs")
         references = item.get("refs")
         if not isinstance(references, list) or not references or any(not isinstance(ref, str) or ref not in evidence for ref in references):
-            errors.append("Missing or invalid brief references: " + location)
+            errors.append(pointer + "/refs: expected a nonempty array of existing source-reference strings")
             return
         inputs = [evidence[ref]["human_input"] for ref in references if isinstance(evidence[ref].get("human_input"), str) and evidence[ref]["human_input"]]
         if human and not inputs:
-            errors.append("Brief intent requires human input: " + location)
+            errors.append(pointer + "/refs: goals, non_goals and requirement constraints must cite a source event with nonempty human_input; assistant/tool reports are not user intent")
         if exclusion:
             quote = item.get("quote")
             if not isinstance(quote, str) or not quote.strip() or not any(quote in source for source in inputs):
-                errors.append("Non-goal needs an exact human quote: " + location)
+                errors.append(pointer + "/quote: expected a nonempty exact substring of human_input in one of this item's cited events; do not invent exclusions")
 
     for field in ("background", "problem", "approach", "status"):
         statement(value.get(field), field)
     for field, minimum, maximum in (("goals", 1, 3), ("non_goals", 0, 3), ("scope", 0, 3), ("constraints", 0, 4)):
         items = value.get(field)
         if not isinstance(items, list) or not minimum <= len(items) <= maximum:
-            errors.append("Invalid brief array: " + field)
+            errors.append(f"/brief/{field}: expected an array with {minimum}–{maximum} items")
             continue
         for index, item in enumerate(items):
             requirement = field == "constraints" and isinstance(item, dict) and item.get("kind") == "requirement"
-            if field == "constraints" and (not isinstance(item, dict) or item.get("kind") not in ("requirement", "environment")):
-                errors.append("Invalid brief constraint kind")
+            if field == "constraints" and (not isinstance(item, dict) or item.get("kind") not in CONSTRAINT_KINDS):
+                errors.append(f"/brief/constraints/{index}/kind: expected one of " + json.dumps(CONSTRAINT_KINDS)
+                              + "; requirement needs cited human input; environment describes recorded context or limits. Choose from source provenance, not to bypass validation")
             statement(item, f"{field}/{index}", human=field in ("goals", "non_goals") or requirement,
                       exclusion=field == "non_goals", constraint=field == "constraints")
     if sum(map(len, visible)) > MAX_BRIEF_CHARS:
