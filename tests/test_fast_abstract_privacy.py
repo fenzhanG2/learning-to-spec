@@ -7,9 +7,9 @@ from pathlib import Path
 from unittest.mock import patch
 
 from offline_provider import guard_offline_test
-from session_spec.abstract_privacy import generate_abstract_private, load_abstract_review, prepare_abstract_review, validate_abstract_story
+from session_spec.abstract_privacy import READER_NAVIGATION, generate_abstract_private, load_abstract_review, prepare_abstract_review, validate_abstract_story
 from session_spec.backend import preparation_budget
-from session_spec.fast_quality import QualityReviewFailure
+from session_spec.fast_quality import SCHEMA, QualityReviewFailure
 from session_spec.reduction_semantic import PrivacyReviewFailure
 from test_fast_quality import quality
 from test_fast_story import draft
@@ -64,7 +64,8 @@ class FastAbstractPrivacyTests(unittest.TestCase):
         self.assertNotIn("SOURCE_ATTENTION_CANDIDATES", self.backend.prompts[2])
         self.assertIn("SOURCE SLOTS", self.backend.prompts[2])
         manifest = load_abstract_review(self.review_directory, validate_parent=True)
-        self.assertEqual(manifest["quality_profile"], "bounded-source-review/v1")
+        self.assertEqual(manifest["quality_profile"], SCHEMA)
+        self.assertEqual(manifest["reader_navigation"], READER_NAVIGATION)
         result = self.export(review)
         self.assertEqual(len(self.backend.calls), 3)
         self.assertEqual(result["model_calls_after_approval"], 0)

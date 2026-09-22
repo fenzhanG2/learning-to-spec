@@ -159,12 +159,12 @@ class AgentEvidenceTests(unittest.TestCase):
         self.assertLess(len(output), 2000)
         self.assertEqual(len(events[-2]["arguments"]["new_string"]), 16000)
 
-    def test_selected_citations_are_bounded_without_losing_archive_refs(self):
+    def test_selected_citations_preserve_all_authored_refs_without_mutation(self):
         events = [{"ref": f"E{number:06}", "type": "user.message", "human_input": f"Correction {number}"} for number in range(1, 50)]
         before = copy.deepcopy(events)
         index = EvidenceIndex(events, tool_ledger(events), "en")
         selected = index.cite([event["ref"] for event in events])
-        self.assertEqual(len(re.findall(r"E\d{6}", selected)), 3)
+        self.assertEqual(re.findall(r"E\d{6}", selected), [event["ref"] for event in events])
         self.assertEqual(events, before)
 
     def test_unknown_visible_ref_is_not_a_dead_link(self):

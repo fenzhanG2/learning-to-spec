@@ -62,14 +62,14 @@ class TransferProbeTests(unittest.TestCase):
     def test_recorded_renderer_reproduces_old_pair_and_detects_middle_tamper(self):
         events = packet()
         events[1]["result"]["content"] += "prefix " * 1000 + "MIDDLE_BOUNDARY" + " suffix" * 1000
-        for renderer in ("companion/v5", "companion/v6", "companion/v7", "companion/v8"):
+        for renderer in ("companion/v5", "companion/v6", "companion/v7", "companion/v8", "companion/v9"):
             with self.subTest(renderer=renderer), tempfile.TemporaryDirectory() as temporary:
                 documents = render_agent_package(article(), events, "en", evidence_renderer=renderer)
                 with patch("session_spec.transfer_probe.render_agent_package", return_value=documents), patch("session_spec.transfer_probe.EVIDENCE_RENDERER", renderer):
                     record = run_probe(draft(), events, FakeBackend([transfer_review()]), Path(temporary), language="en")
                 self.assertEqual(validate_record(record, events), [])
                 self.assertTrue(final_pair_matches(record, draft(), events, "en"))
-                if renderer == "companion/v8":
+                if renderer in ("companion/v8", "companion/v9"):
                     record["documents"]["evidence.md"] = record["documents"]["evidence.md"].replace("MIDDLE_BOUNDARY", "ALTERED_MIDDLE")
                     self.assertTrue(validate_record(record, events))
                     record["identity"]["documents"]["evidence.md"] = digest(record["documents"]["evidence.md"].encode())
@@ -87,9 +87,9 @@ class TransferProbeTests(unittest.TestCase):
     def test_probe_accepts_versioned_citations_but_not_unknown_renderers(self):
         with tempfile.TemporaryDirectory() as temporary:
             record = run_probe(draft(), packet(), FakeBackend([transfer_review()]), Path(temporary))
-            self.assertEqual(record["identity"]["renderer"], "companion/v8")
+            self.assertEqual(record["identity"]["renderer"], "companion/v9")
             self.assertEqual(validate_record(record, packet()), [])
-            for renderer in ("companion/v5", "companion/v6", "companion/v7"):
+            for renderer in ("companion/v5", "companion/v6", "companion/v7", "companion/v8"):
                 record["identity"]["renderer"] = renderer
                 self.assertEqual(validate_record(record, packet()), [])
             for renderer in ("companion/v999", [], {}, None, 6, True):

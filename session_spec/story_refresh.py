@@ -48,7 +48,7 @@ def refresh_story(directory, destination):
             write_json(staged_support / "story-source.json", source)
             article = json.loads((staged_support / "article.json").read_bytes())
             packet = json.loads((staged_support / "input.json").read_bytes())
-            renderer = "companion/v8" if previous.get("evidence_renderer") == "companion/v8" else "companion/v7"
+            renderer = previous["evidence_renderer"] if previous.get("evidence_renderer") in ("companion/v8", "companion/v9") else "companion/v7"
             agent_files = write_agent_package(article, packet, previous["language"], staged, staged_support,
                                              evidence_renderer=renderer if article.get("agent_detail", {}).get("schema") == "agent-detail/v3" else None)
             write_json(staged_support / "human-presentation.json", HUMAN_PRESENTATION)

@@ -151,10 +151,11 @@ def decision_phase(phase, ledger, label):
 
 
 def render_transfer(article, events, ledger, language, trajectory_style="decisions"):
-    claim_only = trajectory_style == "handoff-portable-v5"
-    scoped_citations = trajectory_style in {"handoff-portable-v4", "handoff-portable-v5"}
-    payload_aware = trajectory_style in {"handoff-portable-v2", "handoff-portable-v3", "handoff-portable-v4", "handoff-portable-v5"}
-    portable = trajectory_style in {"handoff-portable", "handoff-portable-v2", "handoff-portable-v3", "handoff-portable-v4", "handoff-portable-v5"}
+    complete_citations = trajectory_style == "handoff-portable-v6"
+    claim_only = trajectory_style in {"handoff-portable-v5", "handoff-portable-v6"}
+    scoped_citations = trajectory_style in {"handoff-portable-v4", "handoff-portable-v5", "handoff-portable-v6"}
+    payload_aware = trajectory_style in {"handoff-portable-v2", "handoff-portable-v3", "handoff-portable-v4", "handoff-portable-v5", "handoff-portable-v6"}
+    portable = trajectory_style in {"handoff-portable", "handoff-portable-v2", "handoff-portable-v3", "handoff-portable-v4", "handoff-portable-v5", "handoff-portable-v6"}
     separate = trajectory_style == "handoff-split" or portable
     if separate:
         trajectory_style = "handoff"
@@ -165,7 +166,8 @@ def render_transfer(article, events, ledger, language, trajectory_style="decisio
         raise ValueError("Unknown trajectory rendering style")
     detail = article["agent_detail"]
     label = lambda english, chinese: chinese if language.startswith("zh") else english
-    evidence_index = EvidenceIndex(events, ledger, language, legacy_roles=legacy_roles, portable=portable, payload_aware=payload_aware) if trajectory_style == "handoff" else None
+    evidence_index = EvidenceIndex(events, ledger, language, legacy_roles=legacy_roles, portable=portable,
+                                   payload_aware=payload_aware, complete_citations=complete_citations) if trajectory_style == "handoff" else None
     cite = evidence_index.cite if evidence_index else lambda refs: ", ".join(refs)
     sources_label = label("Selected evidence: ", "关键来源：") if evidence_index else label("Sources: ", "来源：")
     resume = detail["resume"]

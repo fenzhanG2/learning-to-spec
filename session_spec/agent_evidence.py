@@ -24,7 +24,7 @@ def argument_focus(arguments):
 
 
 class EvidenceIndex:
-    def __init__(self, events, ledger, language, legacy_roles=False, portable=False, payload_aware=False, complete_short=False, complete_payloads=False):
+    def __init__(self, events, ledger, language, legacy_roles=False, portable=False, payload_aware=False, complete_short=False, complete_payloads=False, complete_citations=True):
         self.events = {event["ref"]: event for event in events}
         self.calls = {}
         self.language = language
@@ -33,6 +33,7 @@ class EvidenceIndex:
         self.payload_aware = payload_aware
         self.complete_short = complete_short or complete_payloads
         self.complete_payloads = complete_payloads
+        self.complete_citations = complete_citations
         for call in ledger["calls"]:
             for ref in [call["request_ref"], *[event["ref"] for event in call["results"]]]:
                 self.calls[ref] = call
@@ -87,6 +88,11 @@ class EvidenceIndex:
 
     def cite(self, refs):
         unique = list(dict.fromkeys(refs))
+        if self.complete_citations:
+            # Authored support belongs to its claim, including later corrections
+            # and both sides of a tool call. Retain the recorded order.
+            return "; ".join(unique)
+        # Explicit old renderer versions reproduce already-reviewed bytes.
         unique = [ref for ref in unique if not (self.events[ref].get("type") == "tool.execution_start"
                   and any(result["ref"] in unique for result in self.calls.get(ref, {}).get("results", [])))]
         selected = []

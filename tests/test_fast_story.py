@@ -56,7 +56,7 @@ class FastStoryTests(unittest.TestCase):
         self.assertEqual(report["semantic_review"], "pending")
         self.assertNotIn("output_schema", report)
         self.assertNotIn("final_transfer_policy", report["identity"])
-        self.assertEqual(report["evidence_renderer"], "companion/v8")
+        self.assertEqual(report["evidence_renderer"], "companion/v9")
         validation = validate_fast_story(self.output)
         self.assertTrue(validation["valid"], validation)
         self.assertEqual(validation["semantic_review"], "pending")
@@ -64,6 +64,16 @@ class FastStoryTests(unittest.TestCase):
         self.assertEqual((self.output / "_support/source.json").read_bytes(), (self.base / "source.json").read_bytes())
         self.assertIn(b"startup signal observed", (self.output / "evidence.md").read_bytes())
         self.assertTrue((self.output / "human-spec.html").read_bytes().lower().startswith(b"<!doctype html>"))
+
+    def test_saved_v8_draft_still_validates_without_rewriting_approved_bytes(self):
+        backend = FakeBackend([draft()])
+        with patch("session_spec.fast_story.EVIDENCE_RENDERER", "companion/v8"):
+            run_fast_story(self.base, self.output, backend)
+        before = {path.relative_to(self.output): path.read_bytes() for path in self.output.rglob("*") if path.is_file()}
+        validation = validate_fast_story(self.output)
+        self.assertTrue(validation["valid"], validation)
+        self.assertEqual({path.relative_to(self.output): path.read_bytes() for path in self.output.rglob("*") if path.is_file()}, before)
+        self.assertEqual(len(backend.calls), 1)
 
     def test_attention_keeps_literal_hazard_navigation_without_mutating_or_verifying_source(self):
         records = [

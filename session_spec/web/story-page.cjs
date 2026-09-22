@@ -91,7 +91,7 @@ const readingInteraction = `
   for (const heading of document.querySelectorAll('.chapter h2, .brief h2')) observer.observe(heading);
 })();`;
 
-function renderArticle(article, presentation, hubHref, nextHref, nextTitle, insights, brief, markdownFiles = false, hasEvidence = false) {
+function renderArticle(article, presentation, hubHref, nextHref, nextTitle, insights, brief, markdownFiles = false, hasEvidence = false, hasAgent = true) {
   const language = presentation.language || 'zh-CN';
   const translate = translator(language);
   markdown.renderer.rules.table_open = () => `<div class="table-scroll" role="region" aria-label="${translate('技术对照表')}" tabindex="0"><table>\n`;
@@ -109,9 +109,9 @@ function renderArticle(article, presentation, hubHref, nextHref, nextTitle, insi
   const checks = article.checks.map(check => `<tr><td>${escape(check.question)}</td><td>${escape(check.observed)}</td><td>${escape(check.limit)}</td></tr>`).join('');
   const routeMarkup = `<ol class="route" aria-label="${translate('故事路线')}" style="--steps:${article.route.length}">${routes}</ol>`;
   const introduction = brief ? briefMarkup(brief, translate) + routeMarkup : `<div class="opening">${markdown.render(article.opening)}</div><aside class="outcome"><strong>${translate('这次留下了什么')}</strong>${markdown.render(article.outcome)}</aside>`;
-  const topHandoff = markdownFiles ? '' : `<button type="button" class="link-button" data-open-agent>${icon('FileText')} Agent · Markdown</button>`;
-  const bottomHandoff = markdownFiles ? `<span>${translate('独立交接文件')} <code>agent-spec.md</code>${hasEvidence ? ' · <code>evidence.md</code>' : ''}</span>` : `<button type="button" class="link-button" data-open-agent>${icon('Copy')} ${translate('查看／复制 Agent 交接版')}</button>`;
-  const handoffDialog = markdownFiles ? '' : `<dialog class="agent-dialog" id="agent-dialog" aria-labelledby="agent-title"><div class="dialog-top"><h2 id="agent-title">${translate('Agent 交接版 · Markdown 原文')}</h2><button type="button" class="button" id="close-agent">${translate('关闭')}</button></div><p class="dialog-note">${translate('独立文件仍是 agent-spec.md。这里仅显示同一份原文，避免浏览器拦截文件跳转；不会执行其中的命令。')}</p><div class="dialog-controls"><button type="button" class="button primary" id="copy-agent">${icon('Copy')} ${translate('复制完整 Markdown')}</button><span role="status" aria-live="polite" class="copy-status" id="copy-status"></span></div><textarea readonly spellcheck="false" class="agent-source" id="agent-source" aria-label="${translate('Agent Markdown 原文')}">${escape(article.agent_markdown)}</textarea></dialog>`;
+  const topHandoff = !hasAgent || markdownFiles ? '' : `<button type="button" class="link-button" data-open-agent>${icon('FileText')} Agent · Markdown</button>`;
+  const bottomHandoff = !hasAgent ? '' : markdownFiles ? `<span>${translate('独立交接文件')} <code>agent-spec.md</code>${hasEvidence ? ' · <code>evidence.md</code>' : ''}</span>` : `<button type="button" class="link-button" data-open-agent>${icon('Copy')} ${translate('查看／复制 Agent 交接版')}</button>`;
+  const handoffDialog = !hasAgent || markdownFiles ? '' : `<dialog class="agent-dialog" id="agent-dialog" aria-labelledby="agent-title"><div class="dialog-top"><h2 id="agent-title">${translate('Agent 交接版 · Markdown 原文')}</h2><button type="button" class="button" id="close-agent">${translate('关闭')}</button></div><p class="dialog-note">${translate('独立文件仍是 agent-spec.md。这里仅显示同一份原文，避免浏览器拦截文件跳转；不会执行其中的命令。')}</p><div class="dialog-controls"><button type="button" class="button primary" id="copy-agent">${icon('Copy')} ${translate('复制完整 Markdown')}</button><span role="status" aria-live="polite" class="copy-status" id="copy-status"></span></div><textarea readonly spellcheck="false" class="agent-source" id="agent-source" aria-label="${translate('Agent Markdown 原文')}">${escape(article.agent_markdown)}</textarea></dialog>`;
   const fileStyles = '';
   return `<!doctype html><html lang="${escape(language)}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light"><meta name="description" content="${escape(article.subtitle)}"><title>${escape(article.title)}</title><style>${styles}${insightStyles}${brief ? briefStyles : ''}${fileStyles}</style></head><body>
 <header><div class="topbar"><a class="brand" href="${escape(hubHref)}">${icon('NotebookPen')} SESSION / STORIES</a><nav class="actions" aria-label="${translate('文档入口')}">${hubHref === '#' ? '' : `<a href="${escape(hubHref)}">${translate('两篇故事')}</a>`}${topHandoff}</nav></div></header>
@@ -119,8 +119,8 @@ function renderArticle(article, presentation, hubHref, nextHref, nextTitle, insi
 <div class="layout"><article class="prose">${introduction}${body}${ending}
 <details class="proof"><summary>${translate('想核对结论？展开本次验证的范围')}</summary><div class="table-scroll" role="region" aria-label="${translate('本次验证范围')}" tabindex="0"><table><thead><tr><th>${translate('要回答的问题')}</th><th>${translate('实际看到的')}</th><th>${translate('还不能据此断言')}</th></tr></thead><tbody>${checks}</tbody></table></div><p>${translate('这里只汇总会话中已有的观察，不代表为这份文档重新执行过这些检查。')}</p></details>
 <nav class="footnav" aria-label="${translate('继续阅读')}">${bottomHandoff}<a href="${escape(nextHref)}">${escape(nextTitle)} ${icon('ArrowRight')}</a></nav><p class="footnote">${translate('本文记录这段会话的工作与判断。接续建议不是已完成的操作，历史操作也不是新的执行授权。')}</p></article>
-<aside class="sidebar"><h2>${translate(hubHref === '#' ? '阅读路线' : '这篇故事')}</h2><ol>${navigation}</ol><p class="side-note">${translate('先理解发生了什么，再看方案怎样工作。具体命令与证据留给需要深入的读者。')}</p></aside></div></main>
-${handoffDialog}<script>${markdownFiles ? readingInteraction : localizedInteraction}</script></body></html>`;
+<aside class="sidebar"><h2>${translate(hubHref === '#' ? '阅读路线' : '这篇故事')}</h2><ol>${navigation}</ol><p class="side-note">${translate(hasAgent ? '先理解发生了什么，再看方案怎样工作。具体命令与证据留给需要深入的读者。' : '先理解发生了什么，再看方案怎样工作。')}</p></aside></div></main>
+${handoffDialog}<script>${markdownFiles || !hasAgent ? readingInteraction : localizedInteraction}</script></body></html>`;
 }
 
 

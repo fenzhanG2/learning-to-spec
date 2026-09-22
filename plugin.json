@@ -1,6 +1,6 @@
 {
   "name": "learning-to-spec",
-  "version": "0.7.1",
+  "version": "0.7.2",
   "description": "Use /to-spec to export the current Copilot conversation with native privacy review, Human HTML and Agent Markdown. No session paths or external browser required.",
   "extensions": ["./extensions/"],
   "skills": [],

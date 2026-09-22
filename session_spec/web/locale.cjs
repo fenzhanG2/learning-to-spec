@@ -12,6 +12,7 @@ const english = {
   '独立交接文件': 'Companion files:',
   '本文记录这段会话的工作与判断。接续建议不是已完成的操作，历史操作也不是新的执行授权。': 'This document records the session’s work and decisions. Suggested next steps are not completed work, and historical actions are not fresh authorization.',
   '这篇故事': 'In this story', '阅读路线': 'Reading guide',
+  '先理解发生了什么，再看方案怎样工作。': 'Start with what happened, then explore how the solution works.',
   '先理解发生了什么，再看方案怎样工作。具体命令与证据留给需要深入的读者。': 'Start with what happened, then explore how the solution works. The Agent handoff provides detailed commands, trajectory and evidence.',
   'Agent 交接版 · Markdown 原文': 'Agent handoff · Markdown source', '关闭': 'Close',
   '独立文件仍是 agent-spec.md。这里仅显示同一份原文，避免浏览器拦截文件跳转；不会执行其中的命令。': 'The standalone file is agent-spec.md. This viewer shows the identical Markdown without navigating to a download. Commands are never executed.',
