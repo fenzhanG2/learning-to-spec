@@ -17,6 +17,7 @@ Return ONE JSON object with EXACTLY the top-level key quality. Use this structur
 Quality has ONLY schema, verdict, checked, issues. checked contains exactly the FIVE shown categories, each once; chronology belongs under source_faithfulness, never a sixth category. Do not add findings or limitations.
 Pass only if there are no material defects. Fail for invented success, lost constraints, misleading verification, missing actionable continuation, or a material contradiction with the source. Historical/archival tool text is not a new tool execution; an assistant claim is not independent verification. Preserve rejected changes, technical failures, uncertainty, corrections, final decisions and the next concrete verification step. Review only selected reader views; an absent unselected view is not a defect. Do not demand new task execution or extra features. Human prose must tell the original problem, meaningful actions and outcome without raw evidence IDs. Agent prose must make the next move, current state and verification limits clear. Existing identifier aliases are privacy projections, not factual contradictions. Quote a SHORT continuous source span and cite its actual source ref for each issue. Do not invent an issue just to fill the array. No rewrites or patches in this call. Keep each check note under 300 characters and at most six material issues.
 Review chronological claims against the source, not merely numeric citation order: topics may overlap in time, but each cited event must actually belong to its phase. Earlier background references do not justify a later action's motive. Unrelated opening refs, invented initiation, reversed decisions and lost corrections are material defects even when structural reference validation passes.
+For every goal, non-goal, requirement and claimed authorization boundary, compare its actual meaning with the specific cited human_input. A valid human ref to a question about parallel execution does not support a restriction on editing. Treat unsupported attribution to the user, or an unrelated substituted citation, as a material source_faithfulness defect even if another source event reports a related rejection. BRIEF_CLAIM_SOURCE_ALIGNMENT pairs brief statements with their cited source roles and human excerpts as navigation; it is not validation, and truncated excerpts require the complete source. Historical tool refusal text quoted by an assistant is a report of that event, not a direct human requirement or a new instruction. Preserve the rejected outcome and its scope; do not infer a blanket future approval policy. Descriptive environment constraints may record operational limitations, but an unsupported imperative stays unsupported after relabeling it environment.
 FULL_SOURCE_EVENTS is in chronological source order. In an edit record, Old string is the PRE-change content and New string is the requested replacement; old content embedded in a later patch is NOT a later readback. Distinguish a request from its subsequent reported completion. A later reported successful patch can supersede an earlier readback without proving current state. Check both sides and following results before alleging a final-state contradiction.
 When entry_ref is supplied, verify it is the phase's actual entry event, not a convenient ordering number. A closing handoff may cite older unresolved warnings; those support its content without moving the closing request earlier in time.
 Check that abstraction did not erase recorded security-remediation warnings when excluding secret values, or turn a success exit from skipped/no-op checks into actual test verification. Preserve the latest material implementation delta and conditional acceptance hazards in the handoff. Cite actual source support; do not invent a current vulnerability, executed failure or remediation completion.
@@ -120,7 +121,17 @@ class FastQualityBackend:
 
 
 def review_source_quality(reviewer, surface):
-    prompt = "Review these selected abstracted reader documents for source fidelity only.\nSELECTED_DOCUMENTS:\n" + json.dumps(surface, ensure_ascii=False, separators=(",", ":"))
+    from .fast_story import brief_authority_claims
+
+    claims = []
+    for event in surface:
+        data = event.get("data", {}) if isinstance(event, dict) else {}
+        human = data.get("human", {}) if isinstance(data, dict) else {}
+        if isinstance(human, dict):
+            claims.extend(brief_authority_claims(human.get("brief"), reviewer.events))
+    prompt = ("Review these selected abstracted reader documents for source fidelity only.\nBRIEF_CLAIM_SOURCE_ALIGNMENT:\n"
+              + json.dumps(claims, ensure_ascii=False, separators=(",", ":"))
+              + "\nSELECTED_DOCUMENTS:\n" + json.dumps(surface, ensure_ascii=False, separators=(",", ":")))
     for attempt in range(min(2, max(0, 3 - len(reviewer.backend.calls)))):
         try:
             return reviewer.generate(prompt, "source-quality" + ("-repair" if attempt else ""))

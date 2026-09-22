@@ -122,6 +122,30 @@ class FastQualityTests(unittest.TestCase):
         self.assertNotIn("PRIVATE_FINDING_CANARY", str(caught.exception))
         self.assertEqual(json.loads((self.support / "fast-quality.json").read_bytes())["result"], rejected)
 
+    def test_unrelated_human_citation_is_visible_to_quality_with_original_rejection_separate(self):
+        self.events = [{"ref": "E000001", "type": "user.message", "origin": "root",
+                        "human_input": "Is the matrix parallel?", "text": "Is the matrix parallel?"},
+                       {"ref": "E000002", "type": "assistant.message", "origin": "root",
+                        "text": "Archived tool report: the edit was rejected."}]
+        surface = [{"type": "artifact.abstracted", "data": {"human": {"brief": {"constraints": [
+            {"kind": "requirement", "text": "Never edit without approval.", "refs": ["E000001"]}]}}}}]
+        original = copy.deepcopy((surface, self.events))
+        rejected = quality()
+        rejected.update(verdict="fail", issues=[{"reason": "The cited question does not authorize the claimed blanket restriction.",
+                                                  "refs": ["E000001"], "quote": "Is the matrix parallel?"}])
+        wrapper = self.wrapper({"quality": rejected})
+        with self.assertRaises(QualityReviewFailure):
+            review_source_quality(wrapper, surface)
+        prompt = self.backend.prompts[0]
+        claims = json.loads(prompt.split("BRIEF_CLAIM_SOURCE_ALIGNMENT:\n", 1)[1].split("\nSELECTED_DOCUMENTS:", 1)[0])
+        self.assertEqual(claims[0]["text"], "Never edit without approval.")
+        self.assertEqual([source["ref"] for source in claims[0]["cited_sources"]], ["E000001"])
+        self.assertEqual(claims[0]["cited_sources"][0]["human_input_excerpt"], "Is the matrix parallel?")
+        self.assertIn("Archived tool report: the edit was rejected.", prompt)
+        self.assertEqual((surface, self.events), original)
+        self.assertEqual(len(wrapper.calls), 1)
+        self.assertEqual(json.loads((self.support / "fast-quality.json").read_bytes())["result"]["verdict"], "fail")
+
     def test_invalid_quality_keeps_each_raw_response_without_partial_privacy_publication(self):
         directory = self.root / "review"
         scan_session(self.artifact, self.root / "home", directory, audience="local")

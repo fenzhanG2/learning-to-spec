@@ -96,6 +96,34 @@ def handoff_attention(packet):
             "scope": "Literal navigation hints, not verified risks or extra user requirements. Complete source remains supplied."}
 
 
+def brief_authority_claims(brief, packet):
+    """Expose claims beside their actual cited human inputs without adjudicating them."""
+    if not isinstance(brief, dict):
+        return []
+    evidence = {event["ref"]: event for event in packet}
+    claims = []
+    for field in ("goals", "non_goals", "constraints"):
+        items = brief.get(field)
+        if not isinstance(items, list):
+            continue
+        for index, item in enumerate(items):
+            if not isinstance(item, dict) or not isinstance(item.get("refs"), list):
+                continue
+            sources = []
+            for ref in item["refs"]:
+                if not isinstance(ref, str) or ref not in evidence:
+                    continue
+                event = evidence[ref]
+                human_input = event.get("human_input")
+                human_input = human_input if isinstance(human_input, str) else ""
+                sources.append({"ref": ref, "type": event.get("type"), "origin": event.get("origin"),
+                                "has_human_input": bool(human_input), "human_input_excerpt": human_input[:1200],
+                                "excerpt_truncated": len(human_input) > 1200})
+            claims.append({"path": f"/brief/{field}/{index}", "kind": item.get("kind", field),
+                           "text": item.get("text"), "cited_sources": sources})
+    return claims
+
+
 def structural_issues(edition, packet, language):
     if len(json.dumps(edition, ensure_ascii=False)) > MAX_EDITION_CHARACTERS:
         return ["Compact draft exceeds 24,000 JSON characters; shorten prose without dropping requirements or source coverage"]
@@ -239,7 +267,9 @@ def run_fast_story(from_export, destination, backend, *, language="auto", model=
                     write_json(support / f"fast-candidate-{attempt}.json", edition)
                     issues = structural_issues(edition, packet, language)
                     entry.update(candidate_sha256=file_hash(support / f"fast-candidate-{attempt}.json"), issues=issues)
-                    repair_data = {"candidate": edition, "issues": issues}
+                    repair_data = {"candidate": edition, "issues": issues,
+                                   "brief_claim_source_alignment": brief_authority_claims(
+                                       edition.get("brief") if isinstance(edition, dict) else None, packet)}
                 except ModelResponseError as error:
                     issues = ["Invalid JSON response; return one complete object with escaped strings"]
                     repair_data = {"invalid_response": error.response, "issues": issues}
@@ -271,7 +301,12 @@ def run_fast_story(from_export, destination, backend, *, language="auto", model=
                 )
                 prompt += ("\nONE_FINAL_STRUCTURAL_REPAIR\n" + json.dumps(repair_data, ensure_ascii=False)
                            + "\n" + repair_instruction + "Preserve facts and all human input refs. "
-                             "Change only structural defects; Human prose has no E IDs, Agent citations remain. No further drafting call is available.")
+                             "For a human-provenance defect, inspect the actual cited human_input, not just its role or nearby position. "
+                             "Never repair a reported tool rejection by substituting an unrelated human ref. If the item confuses reported history "
+                             "with user intent, replace the item's wording and classification to describe the recorded limitation with its genuine refs; "
+                             "do not keep an unsupported imperative, invent a future approval policy, or discard the rejected change. "
+                             "brief_claim_source_alignment is navigation, not approval; excerpts may be shortened and complete source remains authoritative. "
+                             "Correct only the listed defects, including misclassified source provenance; Human prose has no E IDs, Agent citations remain. No further drafting call is available.")
             source_snapshot(source)
             if plain_path(base / "source.json").read_bytes() != source_bytes or plain_path(base / "evidence.jsonl").read_bytes() != evidence_bytes:
                 raise ValueError("Canonical source changed during drafting")
