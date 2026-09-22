@@ -6,6 +6,7 @@ from .source_excerpt import excerpt_segments, source_excerpt
 
 
 SCHEMA = "review-crosswalk/v1"
+TRANSPORT_SCHEMA = "review-crosswalk-transport/v1"
 MAX_CROSSWALK_CHARS = 90000
 MAX_CLAIMS_PER_GROUP = 12
 MAX_CLAIM_CHARS = 1800
@@ -16,6 +17,35 @@ VISIBLE_FIELDS = {"title", "subtitle", "period", "label", "text", "kind", "markd
                   "avoid", "verify", "reuse_condition", "summary", "purpose", "finding", "decision",
                   "observation", "next_state", "reason", "observed", "limit", "scope", "detail",
                   "evidence_summary", "limits"}
+
+
+def review_crosswalk_transport(crosswalk):
+    catalog = {"sources": {}, "claims": {}}
+    lookup = {kind: {} for kind in catalog}
+    groups = []
+    for group in crosswalk["groups"]:
+        compact = {key: value for key, value in group.items() if key not in catalog}
+        for kind in catalog:
+            identifiers = []
+            for entry in group[kind]:
+                identity = json.dumps(entry, ensure_ascii=False, sort_keys=True)
+                if identity not in lookup[kind]:
+                    identifier = kind[0].upper() + str(len(catalog[kind]) + 1)
+                    lookup[kind][identity] = identifier
+                    catalog[kind][identifier] = entry
+                identifiers.append(lookup[kind][identity])
+            compact[kind] = identifiers
+        groups.append(compact)
+    factored = {"schema": TRANSPORT_SCHEMA,
+                "encoding": "Each group's sources/claims lists resolve in order through catalog.sources/catalog.claims. "
+                            "S/C identifiers are transport keys, not evidence refs. Reuse the complete catalog entry at every occurrence. "
+                            "Metadata, omissions, source roles, excerpts, offsets and citation scopes are unchanged. "
+                            "This only deduplicates the bounded index; read the authoritative historical events and whole edition.",
+                "metadata": {key: value for key, value in crosswalk.items() if key != "groups"},
+                "catalog": catalog, "groups": groups}
+    if len(json.dumps(factored, ensure_ascii=False)) < len(json.dumps(crosswalk, ensure_ascii=False)):
+        return factored
+    return crosswalk
 
 
 def cited_claims(edition):

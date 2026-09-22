@@ -153,6 +153,8 @@ Phase citations are not exclusive time ranges: one message can explain a decisio
 
 Failed source-quote checks report the observed payload channel and a bounded literal navigation hint. An assistant-authored tool argument still uses the tool channel; rendered Markdown is not raw source text. Diagnostics never silently rewrite a quote, change its source role or accept the finding. The existing bounded review retry must still return valid evidence, and literal evidence does not establish semantic correctness.
 
+Experimental editorial index factoring is available only to internal Python callers that explicitly pass `crosswalk_transport=True` to `generate_edition`. It is off by default; normal workflows retain the expanded citation index and existing cache identity. The experiment deduplicates identical source/claim objects only when the serialized index is smaller, preserving selected content, omissions, roles, offsets and citation scopes. Full historical events and the whole edition remain in the prompt. Opt-in runs save both index forms and use a separate versioned cache identity. The initial paired reviewer pilot was inconclusive; lossless JSON round trips and fewer index characters do not establish equivalent reviewer quality or lower end-to-end cost.
+
 See [output contract](docs/output-contract.md), [privacy threat model and research](docs/privacy-design.md) and [source/license notices](third_party/NOTICES.md). Reference projects are not runtime dependencies.
 
 ## Compatibility
