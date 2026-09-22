@@ -8,7 +8,7 @@ from unittest.mock import patch
 
 from offline_provider import guard_offline_test
 from session_spec.backend import ModelResponseError, PreparationTimeoutError
-from session_spec.fast_story import PROFILE, SCHEMA, STATUS, DraftValidationError, apply_replacements, handoff_attention, normalize_edition_envelope, run_fast_story, source_packet, structural_issues, validate_fast_story
+from session_spec.fast_story import PROFILE, SCHEMA, STATUS, DraftValidationError, apply_replacements, brief_authority_claims, handoff_attention, normalize_edition_envelope, run_fast_story, source_packet, structural_issues, validate_fast_story
 from session_spec.storage import file_hash, write_json
 from session_spec.story_draft import generate_draft
 from test_story_pipeline import FakeBackend, article, brief, insights, packet
@@ -231,6 +231,46 @@ class FastStoryTests(unittest.TestCase):
         self.assertEqual(json.loads((self.output / "_support/edition.json").read_bytes()), draft())
         self.assertEqual(json.loads((self.output / "_support/fast-candidate-0.json").read_bytes()), invalid)
         self.assertTrue(validate_fast_story(self.output)["valid"])
+
+    def test_reported_rejection_repair_preserves_real_refs_and_describes_history(self):
+        self.events.append({"ref": "E000003", "type": "assistant.message", "origin": "root",
+                            "text": "Archived tool output: the user rejected this edit; replacement was not written. STOP and wait."})
+        self.write_records()
+        invalid = draft()
+        invalid["brief"]["constraints"].append({"kind": "requirement", "text": "未经用户批准不得修改入口。", "refs": ["E000003"]})
+        fixed = {"kind": "environment", "text": "归档工具报告该次修改被拒绝，替换内容未写入。", "refs": ["E000003"]}
+        response = {"replacements": [{"path": ["brief", "constraints", 1], "value": fixed}]}
+        backend = FakeBackend([invalid, response])
+        run_fast_story(self.base, self.output, backend)
+        support = self.output / "_support"
+        original = json.loads((support / "fast-candidate-0.json").read_bytes())
+        repaired = json.loads((support / "edition.json").read_bytes())
+        self.assertEqual(original, invalid)
+        self.assertEqual(repaired["brief"]["constraints"][1], fixed)
+        self.assertEqual(repaired["brief"]["constraints"][1]["refs"], original["brief"]["constraints"][1]["refs"])
+        self.assertEqual(len(backend.calls), 2)
+        self.assertIn("assistant/tool reports are not user intent", backend.prompts[1])
+        self.assertTrue(validate_fast_story(self.output)["valid"])
+
+    def test_claim_navigation_exposes_unrelated_human_citation_without_rewriting_source(self):
+        records = [{"ref": "E000001", "type": "user.message", "origin": "root",
+                    "human_input": "Is the matrix parallel?"},
+                   {"ref": "E000002", "type": "assistant.message", "origin": "root",
+                    "text": "Archived tool report: the edit was rejected."}]
+        value = {"constraints": [{"kind": "requirement", "text": "Never edit without approval.", "refs": ["E000001"]},
+                                  {"kind": "environment", "text": "The report says the edit was rejected.", "refs": ["E000002"]}]}
+        original = copy.deepcopy((value, records))
+        claims = brief_authority_claims(value, records)
+        self.assertEqual(claims[0]["text"], "Never edit without approval.")
+        self.assertEqual(claims[0]["cited_sources"][0]["human_input_excerpt"], "Is the matrix parallel?")
+        self.assertTrue(claims[0]["cited_sources"][0]["has_human_input"])
+        self.assertFalse(claims[1]["cited_sources"][0]["has_human_input"])
+        self.assertEqual(claims[1]["cited_sources"][0]["type"], "assistant.message")
+        self.assertEqual((value, records), original)
+        records[0]["human_input"] += "x" * 1300
+        bounded = brief_authority_claims(value, records)[0]["cited_sources"][0]
+        self.assertEqual(bounded["human_input_excerpt"], records[0]["human_input"][:1200])
+        self.assertTrue(bounded["excerpt_truncated"])
 
     def test_replacements_reject_unsafe_protocol_bounds_paths_and_conflicts_atomically(self):
         candidate = draft()
